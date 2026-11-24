@@ -1,0 +1,29 @@
+name: Daily P&M update
+
+on:
+  schedule:
+    - cron: "30 3 * * *"      # 03:30 UTC = 09:00 IST (GitHub may start it a little late)
+  workflow_dispatch:           # adds the "Run workflow" button
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      TZ: Asia/Kolkata
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install libraries
+        run: pip install -r requirements.txt
+      - name: Write credentials from GitHub Secrets
+        env:
+          GOOGLE_ADS_YAML: ${{ secrets.GOOGLE_ADS_YAML }}
+          TIDB_YAML: ${{ secrets.TIDB_YAML }}
+        run: |
+          printf '%s\n' "$GOOGLE_ADS_YAML" > google-ads.yaml
+          printf '%s\n' "$TIDB_YAML" > tidb.yaml
+      - name: Update data in TiDB
+        run: python pnm_daily.py --once
