@@ -48,7 +48,7 @@ CONFIG = {
     #   "campaign_name" -> city = first city_to_geo key found in the campaign name
     #   "user_location" -> city = where users actually were (Google Ads location report)
     "city_source": "campaign_name",
-    "city_aliases": {"BLR": "Bangalore", "MUM": "Mumbai", "HYD": "Hyderabad",
+    "city_aliases": {"NCR": "Delhi", "BLR": "Bangalore", "MUM": "Mumbai", "HYD": "Hyderabad",
                      "DEL": "Delhi", "CHN": "Chennai", "KOL": "Kolkata", "AMD": "Ahmedabad"},
     "api_version": "",                    # "" = auto-detect newest working version (e.g. "v22")
     "chunk_days": 31,                     # backfill pulled in chunks of this many days
@@ -61,7 +61,8 @@ CONFIG = {
 
     # ---------- Google Trends ----------
     "trends_keywords": ["packers and movers", "house shifting", "home shifting"],
-    "trends_daily_window": 90,     # days per pull (Trends only gives daily data up to ~90 days)
+    "trends_daily_window": 90,
+    "trends_new_states_per_run": 3,   # full Trends history is loaded for at most this many states per run     # days per pull (Trends only gives daily data up to ~90 days)
     "trends_recent_overwrite": 7,  # recent days overwritten each run (Trends can revise them)
     # State-level only for India; cities in one state share a line. Verify codes on trends.google.com
     "city_to_geo": {
@@ -255,6 +256,21 @@ def _read_yaml(path):
     return out
 
 
+def _ads_err(r):
+    """Short, readable Google Ads error: code + Google's own explanation."""
+    try:
+        j = r.json()
+        j = j[0] if isinstance(j, list) else j
+        e = j.get("error", {})
+        parts = [e.get("message", "")]
+        for d in e.get("details", []):
+            for x in d.get("errors", []):
+                parts.append(f"{list(x.get('errorCode', {}).values())} {x.get('message', '')}")
+        return " | ".join(p for p in parts if p)
+    except Exception:
+        return r.text[:2000]
+
+
 class AdsREST:
     """Google Ads API over plain HTTPS (REST). Works on any Python version."""
 
@@ -303,7 +319,7 @@ class AdsREST:
                 print(f"   Google Ads API version: {self.version}")
                 return self.version
             if r.status_code in (401, 403):
-                raise RuntimeError(f"Google Ads access denied ({r.status_code}): {r.text[:400]}")
+                raise RuntimeError(f"Google Ads access denied ({r.status_code}): {_ads_err(r)}")
             errors.append(r.status_code)
         raise RuntimeError(f"No working Google Ads API version found (status codes {set(errors)}).")
 
@@ -311,7 +327,7 @@ class AdsREST:
         v = self._pick_version()
         r = self._post(v, query)
         if r.status_code != 200:
-            raise RuntimeError(f"Google Ads query failed ({r.status_code}): {r.text[:500]}")
+            raise RuntimeError(f"Google Ads query failed ({r.status_code}): {_ads_err(r)}")
         for batch in r.json():
             for row in batch.get("results", []):
                 yield row
@@ -485,15 +501,21 @@ def trends_backfill(con, geo, cfg, start, end):
         if we >= end:
             break
         cur = we - timedelta(days=14)
-        time.sleep(5)
+        time.sleep(12)        # gentle pacing: Google Trends rate-limits fast callers
     if stitched is None:
         return 0
     stitched = stitched / stitched.max() * 100   # one-time anchor scale, fixed from now on
-    return write_trends(con, geo, stitched)
+    c = db_connect(cfg)                          # fresh connection: Trends waits can be long
+    try:
+        return write_trends(c, geo, stitched)
+    finally:
+        c.close()
 
 
 def trends_daily_update(con, geo, cfg, end):
-    stored = read_trends(con)
+    c = db_connect(cfg)
+    stored = read_trends(c)
+    c.close()
     base = stored[stored.geo == geo].set_index("date")["idx"].sort_index()
     if base.empty:
         return trends_backfill(con, geo, cfg, pd.Timestamp(cfg["backfill_start"]), end)
@@ -503,7 +525,11 @@ def trends_daily_update(con, geo, cfg, end):
     if scaled is None:
         return 0
     overwrite_from = end - timedelta(days=cfg["trends_recent_overwrite"] - 1)
-    return write_trends(con, geo, scaled, overwrite_from=overwrite_from)
+    c = db_connect(cfg)
+    try:
+        return write_trends(c, geo, scaled, overwrite_from=overwrite_from)
+    finally:
+        c.close()
 
 
 # =====================================================================
@@ -529,6 +555,7 @@ def run_refresh(cfg, backfill=False):
         df = fetch_api(cfg, start, yday, enabled_only=False)
         known = stored_campaign_ids(con)
         df = df[(df.status == "ENABLED") | (df.campaign_id.isin(known))]
+    remap_unmapped(con, cfg)
     ins, upd = upsert_ads(con, df, cfg)
     unmapped = sorted(df.loc[df.city == "Unmapped", "campaign"].unique())
     log(con, "ads", f"{start.date()}..{yday.date()}: {ins} new rows, {upd} rows conversions refreshed, "
@@ -540,15 +567,44 @@ def run_refresh(cfg, backfill=False):
     nogeo = [c for c in cities if c not in cfg["city_to_geo"]]
     if nogeo:
         log(con, "warn", f"no Trends geo for: {nogeo}")
-    for geo in sorted({cfg["city_to_geo"][c] for c in cities if c in cfg["city_to_geo"]}):
-        try:
-            n = trends_backfill(con, geo, cfg, start, yday) if backfill else trends_daily_update(con, geo, cfg, yday)
-            log(con, "trends", f"{geo}: {n} days written")
-        except Exception as e:
-            log(con, "trends-error", f"{geo}: {e}")   # ads data is still saved; Trends retries tomorrow
-        time.sleep(5)
-    log(con, "refresh-ok", f"data up to {yday.date()}")
+    have = set(q(con, "SELECT DISTINCT geo FROM trends_daily")["geo"])
+    log(con, "refresh-ok", f"data up to {yday.date()}")   # Google Ads part is done
     con.close()
+
+    hist_start = pd.Timestamp(cfg["backfill_start"])
+    new_budget = cfg["trends_new_states_per_run"]
+    for geo in sorted({cfg["city_to_geo"][c] for c in cities if c in cfg["city_to_geo"]}):
+        if geo not in have:
+            if new_budget <= 0:
+                print(f"[trends] {geo}: history queued for a later run")
+                continue
+            new_budget -= 1
+        try:
+            n = (trends_backfill(None, geo, cfg, hist_start, yday) if geo not in have
+                 else trends_daily_update(None, geo, cfg, yday))
+            c2 = db_connect(cfg); log(c2, "trends", f"{geo}: {n} days written"); c2.close()
+        except Exception as e:
+            try:
+                c2 = db_connect(cfg); log(c2, "trends-error", f"{geo}: {str(e)[:300]}"); c2.close()
+            except Exception:
+                print("trends-error", geo, e)
+        time.sleep(10)
+
+
+def remap_unmapped(con, cfg):
+    """Campaigns stored as 'Unmapped' get their city once a new alias matches them."""
+    if cfg["city_source"] != "campaign_name":
+        return
+    rows = q(con, "SELECT DISTINCT campaign_id, campaign FROM ads_campaign_daily WHERE city = 'Unmapped'")
+    cur = con.cursor()
+    for r in rows.itertuples(index=False):
+        city = _city_from_name(r.campaign, cfg)
+        if city != "Unmapped":
+            cur.execute("UPDATE IGNORE ads_campaign_daily SET city = %s WHERE campaign_id = %s AND city = 'Unmapped'",
+                        (city, r.campaign_id))
+            # any leftover rows would double count: the same day already exists under the right city
+            cur.execute("DELETE FROM ads_campaign_daily WHERE campaign_id = %s AND city = 'Unmapped'", (r.campaign_id,))
+            log(con, "remap", f"{r.campaign} -> {city}")
 
 
 # =====================================================================
