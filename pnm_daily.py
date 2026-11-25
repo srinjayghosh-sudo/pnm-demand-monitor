@@ -65,12 +65,13 @@ CONFIG = {
     "trends_keywords": ["packers and movers", "house shifting", "home shifting", "bike shifting"],
     "decision_keyword": "packers and movers",   # keyword the actions / overview / insights are based on
     "trends_daily_window": 90,
-    "trends_new_states_per_run": 3,   # full Trends history is loaded for at most this many states per run     # days per pull (Trends only gives daily data up to ~90 days)
+    "trends_new_states_per_run": 2,
+    "trends_max_429_per_run": 4,      # after this many "too many requests" replies, stop Trends for this run   # full Trends history is loaded for at most this many states per run     # days per pull (Trends only gives daily data up to ~90 days)
     "trends_recent_overwrite": 7,
     # ---- demand planning (forecast, all-India, locations, brand) ----
     "forecast_keyword": "packers and movers",   # used for Keyword Planner's main-keyword column
     "forecast_refresh_days": 7,                  # 5-year Trends history per state refreshed weekly
-    "forecast_states_per_run": 5,                # at most this many 5-year pulls per run (rate limits)
+    "forecast_states_per_run": 4,                # at most this many 5-year pulls per run (rate limits)
     "forecast_threshold_pct": 12,                # weeks this far above/below normal get a budget note
     # Monthly search volumes from Google Ads Keyword Planner (exact numbers, incl. brand terms)
     "kp_refresh_days": 30,
@@ -216,6 +217,9 @@ def db_connect(cfg):
             PRIMARY KEY (city, keyword, ym))""")
         cur.execute("""CREATE TABLE IF NOT EXISTS job_runs (
             job VARCHAR(64) NOT NULL PRIMARY KEY, last_ok VARCHAR(19), note TEXT)""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS dashboard_files (
+            name VARCHAR(32) NOT NULL, part INT NOT NULL, data LONGBLOB, updated_at VARCHAR(19),
+            PRIMARY KEY (name, part))""")
         cur.execute("""CREATE TABLE IF NOT EXISTS dashboard_cache (
             id VARCHAR(16) NOT NULL PRIMARY KEY, payload LONGTEXT, xlsx LONGBLOB, updated_at VARCHAR(19))""")
         cur.execute("""CREATE TABLE IF NOT EXISTS run_log (
@@ -555,17 +559,45 @@ def fetch_api(cfg, start, end, enabled_only=True):
 # =====================================================================
 # GOOGLE TRENDS
 # =====================================================================
+class TrendsPaused(RuntimeError):
+    pass
+
+
+def _trends_guard():
+    if _TRENDS["blocked"]:
+        raise TrendsPaused("Google Trends is rate-limiting this run; the rest continues tomorrow")
+
+
+def _trends_fail(e):
+    if "429" in str(e):
+        _TRENDS["fails"] += 1
+        if _TRENDS["fails"] >= cfg_trends_limit():
+            _TRENDS["blocked"] = True
+
+
+def cfg_trends_limit():
+    return CONFIG.get("trends_max_429_per_run", 4)
+
+
+_TRENDS = {"fails": 0, "blocked": False}
+
+
 def _trends_window(geo, cfg, start, end):
     from pytrends.request import TrendReq
+    _trends_guard()
     py = TrendReq(hl="en-IN", tz=-330)
     tf = f"{start:%Y-%m-%d} {end:%Y-%m-%d}"
-    for attempt in range(4):
+    for attempt in range(3):
         try:
+            _trends_guard()
             py.build_payload(cfg["trends_keywords"], timeframe=tf, geo=geo)
             d = py.interest_over_time()
             break
+        except TrendsPaused:
+            raise
         except Exception as e:
-            wait = 30 * (attempt + 1)
+            _trends_fail(e)
+            wait = 45 * (attempt + 1)
             print(f"   Trends {geo} {tf} failed ({e}); retry in {wait}s")
             time.sleep(wait)
     else:
@@ -723,11 +755,14 @@ def run_trends_daily(cfg):
             n = (trends_backfill(None, geo, cfg, hist_start, yday) if geo not in have
                  else trends_daily_update(None, geo, cfg, yday))
             c2 = db_connect(cfg); log(c2, "trends", f"{geo}: {n} days written"); c2.close()
+        except TrendsPaused:
+            print(f"[trends] {geo}: paused (rate limit); continues next run")
+            break
         except Exception as e:
             try:
-                c2 = db_connect(cfg); log(c2, "trends-error", f"{geo}: {str(e)[:300]}"); c2.close()
+                c2 = db_connect(cfg); log(c2, "warn", f"Google Trends daily {geo}: {str(e)[:200]}"); c2.close()
             except Exception:
-                print("trends-error", geo, e)
+                print("trends warn", geo, e)
         time.sleep(10)
 
 
@@ -1226,12 +1261,16 @@ def _trends_client():
 
 def _with_retry(fn, label, tries=3):
     for attempt in range(tries):
+        _trends_guard()
         try:
             return fn()
+        except TrendsPaused:
+            raise
         except Exception as e:
-            if attempt == tries - 1:
+            _trends_fail(e)
+            if attempt == tries - 1 or _TRENDS["blocked"]:
                 raise
-            wait = 40 * (attempt + 1)
+            wait = 45 * (attempt + 1)
             print(f"   {label} failed ({e}); retry in {wait}s")
             time.sleep(wait)
 
@@ -1353,9 +1392,12 @@ def run_planning_jobs(cfg):
                                  for d, row in ind.iterrows() for kw, v in row.items() if pd.notna(v)])
                 log(con, "signals", f"{geo}: rental-search history {len(ind)} weeks")
             except Exception as e:
-                con = db_connect(cfg); log(con, "trends-error", f"indicators {geo}: {str(e)[:300]}")
+                con = db_connect(cfg); log(con, "warn", f"Google Trends rental searches {geo}: {str(e)[:200]}")
+        except TrendsPaused:
+            print(f"[trends] {geo}: paused (rate limit); continues next run")
+            break
         except Exception as e:
-            con = db_connect(cfg); log(con, "trends-error", f"5y {geo}: {str(e)[:300]}")
+            con = db_connect(cfg); log(con, "warn", f"Google Trends 5-year {geo}: {str(e)[:200]}")
         time.sleep(15)
 
     # 1b) daily rainfall (NASA POWER) and macro context (World Bank)
@@ -1376,7 +1418,7 @@ def run_planning_jobs(cfg):
             _job_done(con, "trends-cities", f"{len(sc)} cities")
             log(con, "locations", f"{len(sc)} cities")
         except Exception as e:
-            con = db_connect(cfg); log(con, "trends-error", f"cities: {str(e)[:300]}")
+            con = db_connect(cfg); log(con, "warn", f"Google Trends cities: {str(e)[:200]}")
 
     # 3) Keyword Planner monthly volumes per city (Google Ads API, not rate-limited like Trends)
     try:
@@ -2064,8 +2106,8 @@ def save_cache(cfg, sheets):
             payload[k] = _records(sheets.get(k))
         write_xlsx(cfg, sheets)
         xbytes = open(cfg["output_xlsx"], "rb").read()
-        if len(xbytes) > 5_000_000:
-            print("Excel too large to store in TiDB; skipping the Excel copy.")
+        if len(xbytes) > 40_000_000:
+            print("Excel too large to store; skipping the Excel copy.")
             xbytes = None
     con = db_connect(cfg)
     try:   # recent notes (not errors) the dashboard should show, newest first, one per topic
@@ -2080,10 +2122,22 @@ def save_cache(cfg, sheets):
             not q(con, "SELECT job FROM job_runs WHERE note = 'needs Basic access' LIMIT 1").empty
     except Exception:
         pass
-    con.cursor().execute(
-        "INSERT INTO dashboard_cache (id, payload, xlsx, updated_at) VALUES ('main', %s, %s, %s) "
-        "ON DUPLICATE KEY UPDATE payload = VALUES(payload), xlsx = VALUES(xlsx), updated_at = VALUES(updated_at)",
-        (json.dumps(payload, default=str), xbytes, datetime.now().isoformat(timespec="seconds")))
+    import gzip
+    now = datetime.now().isoformat(timespec="seconds")
+    blob = gzip.compress(json.dumps(payload, default=str).encode("utf-8"), 6)
+    cur = con.cursor()
+    # TiDB rows are limited to ~6 MB, so big blobs are stored in 4 MB parts
+    for name, data in (("payload_gz", blob), ("xlsx", xbytes)):
+        cur.execute("DELETE FROM dashboard_files WHERE name = %s", (name,))
+        if data:
+            parts = [data[i:i + 4_000_000] for i in range(0, len(data), 4_000_000)]
+            for i, part in enumerate(parts):
+                cur.execute("INSERT INTO dashboard_files (name, part, data, updated_at) VALUES (%s,%s,%s,%s)",
+                            (name, i, part, now))
+    # small marker row (older dashboards read this table)
+    cur.execute("INSERT INTO dashboard_cache (id, payload, xlsx, updated_at) VALUES ('main', %s, NULL, %s) "
+                "ON DUPLICATE KEY UPDATE payload = VALUES(payload), xlsx = NULL, updated_at = VALUES(updated_at)",
+                (json.dumps({"meta": payload["meta"], "moved": "dashboard_files"}), now))
     con.close()
     print("Dashboard data saved to TiDB.")
 
