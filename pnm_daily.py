@@ -56,16 +56,18 @@ CONFIG = {
 
     # ---------- Refresh rules ----------
     "maturity_days": 7,            # conversions re-fetched for this many days back
-    "refresh_cols": ["conversions"],  # columns overwritten on already-stored days
+    "refresh_cols": ["conversions", "impr_share", "budget_lost_is", "rank_lost_is"],  # re-pulled for 7 days
     "backfill_start": "2024-11-01",
 
     # ---------- Google Trends ----------
-    "trends_keywords": ["packers and movers", "house shifting", "home shifting"],
+    # Google Trends keywords: fetched together (one request, same scale) and kept SEPARATE (max 5)
+    "trends_keywords": ["packers and movers", "house shifting", "home shifting", "bike shifting"],
+    "decision_keyword": "packers and movers",   # keyword the actions / overview / insights are based on
     "trends_daily_window": 90,
     "trends_new_states_per_run": 3,   # full Trends history is loaded for at most this many states per run     # days per pull (Trends only gives daily data up to ~90 days)
     "trends_recent_overwrite": 7,
     # ---- demand planning (forecast, all-India, locations, brand) ----
-    "forecast_keyword": "packers and movers",   # the keyword the 12-month forecast is built on
+    "forecast_keyword": "packers and movers",   # used for Keyword Planner's main-keyword column
     "forecast_refresh_days": 7,                  # 5-year Trends history per state refreshed weekly
     "forecast_states_per_run": 5,                # at most this many 5-year pulls per run (rate limits)
     "forecast_threshold_pct": 12,                # weeks this far above/below normal get a budget note
@@ -105,7 +107,7 @@ CONFIG = {
     "output_xlsx": "pnm_seasonality_output.xlsx",
 }
 
-BASE_COLS = ["impressions", "clicks", "cost", "conversions", "impr_share"]
+BASE_COLS = ["impressions", "clicks", "cost", "conversions", "impr_share", "budget_lost_is", "rank_lost_is"]
 
 
 # =====================================================================
@@ -158,9 +160,23 @@ def db_connect(cfg):
             city VARCHAR(64) NOT NULL, impressions DOUBLE, clicks DOUBLE, cost DOUBLE,
             conversions DOUBLE, impr_share DOUBLE, first_fetched_at VARCHAR(19), conv_updated_at VARCHAR(19),
             PRIMARY KEY (date, campaign_id, city))""")
+        have_cols = set(q(con, "SELECT column_name AS c FROM information_schema.columns WHERE table_schema = %s "
+                              "AND table_name = 'ads_campaign_daily'", (dbname,))["c"].str.lower())
+        for col in ("budget_lost_is", "rank_lost_is"):
+            if col not in have_cols:
+                cur.execute(f"ALTER TABLE ads_campaign_daily ADD COLUMN {col} DOUBLE")
         cur.execute("""CREATE TABLE IF NOT EXISTS trends_daily (
             date VARCHAR(10) NOT NULL, geo VARCHAR(16) NOT NULL, idx DOUBLE, fetched_at VARCHAR(19),
             PRIMARY KEY (date, geo))""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS trends_daily_kw (
+            date VARCHAR(10) NOT NULL, geo VARCHAR(16) NOT NULL, kw VARCHAR(64) NOT NULL, idx DOUBLE,
+            fetched_at VARCHAR(19), PRIMARY KEY (date, geo, kw))""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS trends_weekly_5y_kw (
+            geo VARCHAR(16) NOT NULL, kw VARCHAR(64) NOT NULL, week VARCHAR(10) NOT NULL, idx DOUBLE,
+            fetched_at VARCHAR(19), PRIMARY KEY (geo, kw, week))""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS trends_city_kw (
+            city VARCHAR(64) NOT NULL, kw VARCHAR(64) NOT NULL, idx DOUBLE, fetched_at VARCHAR(19),
+            PRIMARY KEY (city, kw))""")
         cur.execute("""CREATE TABLE IF NOT EXISTS trends_weekly_5y (
             geo VARCHAR(16) NOT NULL, week VARCHAR(10) NOT NULL, idx DOUBLE, fetched_at VARCHAR(19),
             PRIMARY KEY (geo, week))""")
@@ -208,15 +224,16 @@ def upsert_ads(con, df, cfg):
                             (str(df.date.min()),)).astype(str).values.tolist()))
     upd_cols = ", ".join(f"{c} = VALUES({c})" for c in cfg["refresh_cols"])
     sql = ("INSERT INTO ads_campaign_daily (date, campaign_id, campaign, city, impressions, clicks, cost, "
-           "conversions, impr_share, first_fetched_at, conv_updated_at) "
-           "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+           "conversions, impr_share, budget_lost_is, rank_lost_is, first_fetched_at, conv_updated_at) "
+           "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
            f"ON DUPLICATE KEY UPDATE {upd_cols}, conv_updated_at = VALUES(conv_updated_at)")
     rows, upd = [], 0
     for r in df.itertuples(index=False):
         k = (str(r.date), str(r.campaign_id), str(r.city))
         upd += k in keys
         rows.append((*k[:2], r.campaign, k[2], float(r.impressions), float(r.clicks), float(r.cost),
-                     float(r.conversions), None if pd.isna(r.impr_share) else float(r.impr_share), now, now))
+                     float(r.conversions), *[None if pd.isna(getattr(r, c)) else float(getattr(r, c))
+                                             for c in ("impr_share", "budget_lost_is", "rank_lost_is")], now, now))
     cur = con.cursor()
     for i in range(0, len(rows), 500):
         cur.executemany(sql, rows[i:i + 500])
@@ -224,17 +241,26 @@ def upsert_ads(con, df, cfg):
 
 
 def to_city_daily(df):
-    """Campaign rows -> date x city. Impression share = impression-weighted average."""
+    """Campaign rows -> date x city. Shares are combined over eligible impressions (impressions / share)."""
     df = df.copy()
-    for c in ["impressions", "clicks", "cost", "conversions", "impr_share"]:
+    for c in ["impressions", "clicks", "cost", "conversions", "impr_share", "budget_lost_is", "rank_lost_is"]:
+        if c not in df.columns:
+            df[c] = np.nan
         df[c] = pd.to_numeric(df[c], errors="coerce")
-    df["is_w"] = df["impr_share"] * df["impressions"]
-    df["is_imp"] = np.where(df["impr_share"].notna(), df["impressions"], 0)
+    ok = df["impr_share"] > 0
+    df["elig"] = np.where(ok, df["impressions"] / df["impr_share"].where(ok), 0)
+    df["imp_ok"] = np.where(ok, df["impressions"], 0)
+    df["b_w"] = np.where(ok, df["budget_lost_is"].fillna(0) * df["elig"], 0)
+    df["r_w"] = np.where(ok, df["rank_lost_is"].fillna(0) * df["elig"], 0)
+    df["has_lost"] = np.where(ok & df["budget_lost_is"].notna(), df["elig"], 0)
     g = df.groupby(["date", "city"], as_index=False).agg(
         impressions=("impressions", "sum"), clicks=("clicks", "sum"), cost=("cost", "sum"),
-        conversions=("conversions", "sum"), is_w=("is_w", "sum"), is_imp=("is_imp", "sum"))
-    g["impr_share"] = g.is_w / g.is_imp.replace(0, np.nan)
-    return g.drop(columns=["is_w", "is_imp"])
+        conversions=("conversions", "sum"), elig=("elig", "sum"), imp_ok=("imp_ok", "sum"),
+        b_w=("b_w", "sum"), r_w=("r_w", "sum"), has_lost=("has_lost", "sum"))
+    g["impr_share"] = g.imp_ok / g.elig.replace(0, np.nan)
+    g["budget_lost_is"] = g.b_w / g.has_lost.replace(0, np.nan)
+    g["rank_lost_is"] = g.r_w / g.has_lost.replace(0, np.nan)
+    return g.drop(columns=["elig", "imp_ok", "b_w", "r_w", "has_lost"])
 
 
 def read_ads(con, cfg):
@@ -250,27 +276,41 @@ def read_ads(con, cfg):
     return df
 
 
-def read_trends(con):
-    df = q(con, "SELECT date, geo, idx FROM trends_daily")
+def read_trends_kw(con, geo=None):
+    """All daily Trends: date, geo, kw, idx (every keyword on one shared scale per state)."""
+    df = q(con, "SELECT date, geo, kw, idx FROM trends_daily_kw" + (" WHERE geo = %s" if geo else ""),
+           (geo,) if geo else None)
     df["date"] = pd.to_datetime(df["date"])
     df["idx"] = pd.to_numeric(df["idx"])
     return df
 
 
-def write_trends(con, geo, s, overwrite_from=None):
-    """Insert days not stored; overwrite days >= overwrite_from."""
+def read_trends(con, kw=None):
+    """Daily Trends of one keyword (the decision keyword by default): date, geo, idx."""
+    kw = kw or CONFIG["decision_keyword"]
+    df = q(con, "SELECT date, geo, idx FROM trends_daily_kw WHERE kw = %s", (kw,))
+    df["date"] = pd.to_datetime(df["date"])
+    df["idx"] = pd.to_numeric(df["idx"])
+    return df
+
+
+def write_trends(con, geo, frame, overwrite_from=None):
+    """frame: index = date, one column per keyword. Insert days not stored; overwrite days >= overwrite_from."""
     now = datetime.now().isoformat(timespec="seconds")
     new, over = [], []
-    for d, v in s.items():
-        row = (d.strftime("%Y-%m-%d"), geo, float(v), now)
-        (over if overwrite_from is not None and d >= overwrite_from else new).append(row)
+    for d, row in frame.iterrows():
+        for kw, v in row.items():
+            if pd.isna(v):
+                continue
+            r = (d.strftime("%Y-%m-%d"), geo, kw, float(v), now)
+            (over if overwrite_from is not None and d >= overwrite_from else new).append(r)
     cur = con.cursor()
     if new:
-        cur.executemany("INSERT IGNORE INTO trends_daily (date, geo, idx, fetched_at) VALUES (%s,%s,%s,%s)", new)
+        cur.executemany("INSERT IGNORE INTO trends_daily_kw (date, geo, kw, idx, fetched_at) VALUES (%s,%s,%s,%s,%s)", new)
     if over:
-        cur.executemany("INSERT INTO trends_daily (date, geo, idx, fetched_at) VALUES (%s,%s,%s,%s) "
+        cur.executemany("INSERT INTO trends_daily_kw (date, geo, kw, idx, fetched_at) VALUES (%s,%s,%s,%s,%s) "
                         "ON DUPLICATE KEY UPDATE idx = VALUES(idx), fetched_at = VALUES(fetched_at)", over)
-    return len(new) + len(over)
+    return len(frame)
 
 
 # =====================================================================
@@ -389,7 +429,8 @@ def _query_campaign(cfg, start, end, enabled_only):
     return f"""
         SELECT segments.date, campaign.id, campaign.name, campaign.status,
                metrics.impressions, metrics.clicks, metrics.cost_micros,
-               metrics.conversions, metrics.search_impression_share
+               metrics.conversions, metrics.search_impression_share,
+               metrics.search_budget_lost_impression_share, metrics.search_rank_lost_impression_share
         FROM campaign
         WHERE {_campaign_where(cfg, start, end, enabled_only)}"""
 
@@ -438,6 +479,8 @@ def fetch_api(cfg, start, end, enabled_only=True):
                     if rx and not rx.search(name):
                         continue
                     sis = m.get("searchImpressionShare")
+                    sbl = m.get("searchBudgetLostImpressionShare")
+                    srl = m.get("searchRankLostImpressionShare")
                     chunk.append({
                         "date": sg.get("date"),
                         "campaign_id": str(c.get("id")),
@@ -449,6 +492,8 @@ def fetch_api(cfg, start, end, enabled_only=True):
                         "cost": num(m.get("costMicros")) / 1e6,
                         "conversions": num(m.get("conversions")),
                         "impr_share": np.nan if (use_geo or sis in (None, "")) else float(sis),
+                        "budget_lost_is": np.nan if (use_geo or sbl in (None, "")) else float(sbl),
+                        "rank_lost_is": np.nan if (use_geo or srl in (None, "")) else float(srl),
                     })
                 rows.extend(chunk)
                 break
@@ -474,7 +519,8 @@ def fetch_api(cfg, start, end, enabled_only=True):
     keys = ["date", "campaign_id", "campaign", "status", "city"]
     df = df.groupby(keys, as_index=False).agg(
         impressions=("impressions", "sum"), clicks=("clicks", "sum"), cost=("cost", "sum"),
-        conversions=("conversions", "sum"), impr_share=("impr_share", "mean"))
+        conversions=("conversions", "sum"), impr_share=("impr_share", "mean"),
+        budget_lost_is=("budget_lost_is", "mean"), rank_lost_is=("rank_lost_is", "mean"))
     return df[cols]
 
 
@@ -497,23 +543,26 @@ def _trends_window(geo, cfg, start, end):
     else:
         raise RuntimeError(f"Trends failed for {geo} {tf}")
     if d.empty:
-        return pd.Series(dtype=float)
+        return pd.DataFrame(columns=cfg["trends_keywords"], dtype=float)
     if "isPartial" in d.columns:
         partial = d["isPartial"].astype(bool)
         d = d[~partial].drop(columns="isPartial")   # drop incomplete latest day
-    s = d.sum(axis=1).astype(float)
-    s.index = pd.to_datetime(s.index)
-    return s
+    d = d.astype(float)
+    d.index = pd.to_datetime(d.index)
+    return d                                         # one column per keyword, shared scale
 
 
 def _scale_onto(base, new, exclude_recent_days=7):
-    """Scale `new` onto `base` using the ratio of their overlap, ignoring the newest days."""
-    ov = base.index.intersection(new.index)
+    """Scale `new` onto `base` using the ratio of their overlap (all keywords added together),
+    ignoring the newest days. One ratio for every keyword keeps them comparable."""
+    bs = base.sum(axis=1) if isinstance(base, pd.DataFrame) else base
+    ns = new.sum(axis=1) if isinstance(new, pd.DataFrame) else new
+    ov = bs.index.intersection(ns.index)
     if exclude_recent_days > 0 and len(ov) > exclude_recent_days + 14:
         ov = ov[:-exclude_recent_days]
-    if len(ov) == 0 or new.loc[ov].sum() == 0:
+    if len(ov) == 0 or ns.loc[ov].sum() == 0:
         return None
-    return new * (base.loc[ov].sum() / new.loc[ov].sum())
+    return new * (bs.loc[ov].sum() / ns.loc[ov].sum())
 
 
 def trends_backfill(con, geo, cfg, start, end):
@@ -535,7 +584,7 @@ def trends_backfill(con, geo, cfg, start, end):
         time.sleep(12)        # gentle pacing: Google Trends rate-limits fast callers
     if stitched is None:
         return 0
-    stitched = stitched / stitched.max() * 100   # one-time anchor scale, fixed from now on
+    stitched = stitched / stitched.sum(axis=1).max() * 100   # one-time anchor scale, fixed from now on
     c = db_connect(cfg)                          # fresh connection: Trends waits can be long
     try:
         return write_trends(c, geo, stitched)
@@ -545,9 +594,9 @@ def trends_backfill(con, geo, cfg, start, end):
 
 def trends_daily_update(con, geo, cfg, end):
     c = db_connect(cfg)
-    stored = read_trends(c)
+    stored = read_trends_kw(c, geo)
     c.close()
-    base = stored[stored.geo == geo].set_index("date")["idx"].sort_index()
+    base = stored.pivot_table(index="date", columns="kw", values="idx").sort_index()
     if base.empty:
         return trends_backfill(con, geo, cfg, pd.Timestamp(cfg["backfill_start"]), end)
     start = end - timedelta(days=cfg["trends_daily_window"] - 1)
@@ -598,7 +647,27 @@ def run_refresh(cfg, backfill=False):
     nogeo = [c for c in cities if c not in cfg["city_to_geo"] and c != "Unmapped"]
     if nogeo:
         log(con, "warn", f"no Trends geo for: {nogeo}")
-    have = set(q(con, "SELECT DISTINCT geo FROM trends_daily")["geo"])
+    # Trends keyword changed? Old daily Trends were a different search -> rebuild them
+    kw_note = "|".join(cfg["trends_keywords"])
+    kr = q(con, "SELECT note FROM job_runs WHERE job = 'trends-keyword'")
+    if kr.empty or kr.note.iloc[0] != kw_note:
+        con.cursor().execute("DELETE FROM trends_daily_kw")
+        con.cursor().execute("DELETE FROM trends_weekly_5y_kw")
+        con.cursor().execute("DELETE FROM job_runs WHERE job LIKE 't5y:%%' OR job = 'trends-cities'")
+        _job_done(con, "trends-keyword", kw_note)
+        log(con, "trends", f"Daily Trends reset to keyword(s): {kw_note}; history reloads over the next runs")
+    # one-time: fill lost-impression-share for the last 120 days of already-stored rows
+    if _job_due(con, "lost-is-backfill", 100000):
+        try:
+            hist = fetch_api(cfg, yday - timedelta(days=119), yday, enabled_only=False)
+            hist = hist[hist.campaign_id.isin(stored_campaign_ids(con))]
+            c2 = dict(cfg, refresh_cols=["impr_share", "budget_lost_is", "rank_lost_is"])
+            upsert_ads(con, hist, c2)
+            _job_done(con, "lost-is-backfill", f"{len(hist)} rows")
+            log(con, "ads", f"Impression-share history filled for {len(hist)} rows")
+        except Exception as e:
+            log(con, "warn", f"Impression-share history not filled yet: {str(e)[:200]}")
+    have = set(q(con, "SELECT DISTINCT geo FROM trends_daily_kw")["geo"])
     log(con, "refresh-ok", f"data up to {yday.date()}")   # Google Ads part is done
     con.close()
 
@@ -855,6 +924,11 @@ def build_sheets(cfg):
         sheets.update(build_planning(cfg, con, ads, trends))
     except Exception as e:
         print("planning analysis:", e)
+    try:
+        ov = build_overview(cfg, ads, trends, sheets)
+        sheets = {"Overview": ov["Overview"], "Actions": ov["Actions"], "Insights": ov["Insights"], **sheets}
+    except Exception as e:
+        print("overview:", e)
     con.close()
     return sheets
 
@@ -1123,11 +1197,11 @@ def pull_trends_5y(geo, cfg):
     """5 years of weekly Google Trends for the forecast keyword (one request, one consistent scale)."""
     def go():
         py = _trends_client()
-        py.build_payload([cfg["forecast_keyword"]], timeframe="today 5-y", geo=geo)
+        py.build_payload(cfg["trends_keywords"], timeframe="today 5-y", geo=geo)
         d = py.interest_over_time()
         if "isPartial" in d.columns:
             d = d[~d["isPartial"].astype(bool)].drop(columns="isPartial")
-        return d.iloc[:, 0].astype(float)
+        return d.astype(float)                   # one column per keyword
     return _with_retry(go, f"Trends 5y {geo}")
 
 
@@ -1135,9 +1209,9 @@ def pull_trends_cities(cfg):
     """Relative search interest by Indian city over the last 12 months (100 = highest city)."""
     def go():
         py = _trends_client()
-        py.build_payload([cfg["forecast_keyword"]], timeframe="today 12-m", geo="IN")
+        py.build_payload(cfg["trends_keywords"], timeframe="today 12-m", geo="IN")
         d = py.interest_by_region(resolution="CITY", inc_low_vol=True)
-        return d.iloc[:, 0].astype(float)
+        return d.astype(float)                   # rows = cities, one column per keyword
     return _with_retry(go, "Trends cities")
 
 
@@ -1219,9 +1293,10 @@ def run_planning_jobs(cfg):
             s5 = pull_trends_5y(geo, cfg)
             con = db_connect(cfg)
             cur = con.cursor()
-            cur.execute("DELETE FROM trends_weekly_5y WHERE geo = %s", (geo,))
-            cur.executemany("INSERT INTO trends_weekly_5y (geo, week, idx, fetched_at) VALUES (%s,%s,%s,%s)",
-                            [(geo, d.strftime("%Y-%m-%d"), float(v), now) for d, v in s5.items()])
+            cur.execute("DELETE FROM trends_weekly_5y_kw WHERE geo = %s", (geo,))
+            cur.executemany("INSERT INTO trends_weekly_5y_kw (geo, kw, week, idx, fetched_at) VALUES (%s,%s,%s,%s,%s)",
+                            [(geo, kw, d.strftime("%Y-%m-%d"), float(v), now)
+                             for d, row in s5.iterrows() for kw, v in row.items() if pd.notna(v)])
             _job_done(con, f"t5y:{geo}", f"{len(s5)} weeks")
             log(con, "forecast-data", f"{geo}: {len(s5)} weeks")
         except Exception as e:
@@ -1234,9 +1309,9 @@ def run_planning_jobs(cfg):
             sc = pull_trends_cities(cfg)
             con = db_connect(cfg)
             cur = con.cursor()
-            cur.execute("DELETE FROM trends_city_interest")
-            cur.executemany("INSERT INTO trends_city_interest (city, idx, fetched_at) VALUES (%s,%s,%s)",
-                            [(str(k)[:64], float(v), now) for k, v in sc.items()])
+            cur.execute("DELETE FROM trends_city_kw")
+            cur.executemany("INSERT INTO trends_city_kw (city, kw, idx, fetched_at) VALUES (%s,%s,%s,%s)",
+                            [(str(c)[:64], kw, float(v), now) for c, row in sc.iterrows() for kw, v in row.items()])
             _job_done(con, "trends-cities", f"{len(sc)} cities")
             log(con, "locations", f"{len(sc)} cities")
         except Exception as e:
@@ -1343,7 +1418,7 @@ def daily_factors(tr_geo):
 def build_planning(cfg, con, ads, trends):
     """Sheets: Forecast_Weekly, Forecast_Daily, Upcoming_Changes, Locations, KP_Monthly, KP_Keywords."""
     out = {}
-    w5 = q(con, "SELECT geo, week, idx FROM trends_weekly_5y")
+    w5 = q(con, "SELECT geo, kw, week, idx FROM trends_weekly_5y_kw")
     today = pd.Timestamp(date.today())
     future_cal = build_calendar(cfg, today, today + timedelta(days=400))
     cities = ["All India"] + sorted(c for c in ads.city.unique() if c != "All India")
@@ -1357,62 +1432,99 @@ def build_planning(cfg, con, ads, trends):
         cpc = mm.cost / mm.clicks.replace(0, np.nan)
         cpc_m[c] = ((cpc / cpc.mean() - 1) * 100).round(1).to_dict()
 
+    kws = list(cfg["trends_keywords"])
+    ALL = "All keywords"
+    tkw = read_trends_kw(con)
+    w5["idx"] = pd.to_numeric(w5.idx)
     fw, fd, up, acc = [], [], [], []
     for city in cities:
         geo = cfg["city_to_geo"].get(city)
-        g = w5[w5.geo == geo] if geo else w5.iloc[0:0]
-        if g.empty:
+        if not geo:
             continue
-        s5 = pd.Series(pd.to_numeric(g.idx).values, index=pd.to_datetime(g.week))
-        fc, err = forecast_weekly(s5, cfg)
-        if fc is None:
+        gw = w5[w5.geo == geo]
+        if gw.empty:
             continue
-        fc.insert(0, "city", city)
-        fc["week_end"] = fc.week_start + timedelta(days=6)
-        fc["events"] = [", ".join(e for e in future_cal.loc[r.week_start:r.week_end, "event"] if e)
-                        for r in fc.itertuples()]
-        fc["past_cpc_this_month_pct"] = [cpc_m.get(city, {}).get(d.month) for d in fc.week_start]
-        fw.append(fc)
-        acc.append({"city": city, "trends_geo": geo, "backtest_typical_error_pct": None if err is None else round(err, 1),
-                    "history_weeks": int(len(s5))})
-
-        # notable upcoming weeks: runs of high/low weeks, merged
-        t = cfg["forecast_threshold_pct"]
-        flag = np.where(fc.vs_normal_pct >= t, "High", np.where(fc.vs_normal_pct <= -t, "Low", ""))
-        run = None
-        for i, f in enumerate(flag):
-            if f and run and run["type"] == f and i == run["end_i"] + 1:
-                run["end_i"] = i
+        piv5 = gw.pivot_table(index=pd.to_datetime(gw.week), columns="kw", values="idx").sort_index()
+        gd = tkw[tkw.geo == geo]
+        pivd = gd.pivot_table(index="date", columns="kw", values="idx").sort_index() if len(gd) else None
+        for kw in kws + [ALL]:
+            if kw == ALL:
+                s5 = piv5.sum(axis=1, min_count=1)
+                trg = pivd.sum(axis=1, min_count=1) if pivd is not None else None
             else:
-                if run:
-                    up.append(run)
-                run = {"city": city, "type": f, "start_i": i, "end_i": i} if f else None
-        if run:
-            up.append(run)
-        for u in [u for u in up if u["city"] == city and "from" not in u]:
-            seg = fc.iloc[u["start_i"]:u["end_i"] + 1]
-            peak = seg.vs_normal_pct.abs().idxmax()
-            u.update({"from": seg.week_start.iloc[0], "to": seg.week_end.iloc[-1],
-                      "demand_vs_normal_pct": round(float(seg.vs_normal_pct.loc[peak]), 1),
-                      "suggestion": fc.suggestion.loc[peak],
-                      "past_cpc_this_month_pct": fc.past_cpc_this_month_pct.loc[peak],
-                      "events": ", ".join(sorted({e for e in seg.events if e}))[:200]})
+                if kw not in piv5:
+                    continue
+                s5 = piv5[kw]
+                trg = pivd[kw] if pivd is not None and kw in pivd else None
+            fc, err = forecast_weekly(s5.dropna(), cfg)
+            if fc is None:
+                continue
+            fc.insert(0, "city", city)
+            fc.insert(1, "kw", kw)
+            fc["week_end"] = fc.week_start + timedelta(days=6)
+            fc["events"] = [", ".join(e for e in future_cal.loc[r.week_start:r.week_end, "event"] if e)
+                            for r in fc.itertuples()]
+            fc["past_cpc_this_month_pct"] = [cpc_m.get(city, {}).get(d.month) for d in fc.week_start]
+            fw.append(fc)
+            acc.append({"city": city, "kw": kw, "trends_geo": geo,
+                        "backtest_typical_error_pct": None if err is None else round(err, 1),
+                        "history_weeks": int(s5.notna().sum())})
 
-        # next 90 days, day by day
-        trg = trends[trends.geo == geo].set_index("date")["idx"] if geo else None
-        dow, dom = daily_factors(trg)
-        wk = fc.set_index("week_start")
-        for d in pd.date_range(today, today + timedelta(days=89)):
-            ws = wk.index[wk.index <= d]
-            wsel = ws[-1] if len(ws) else wk.index[0]        # days before the first forecast week use it too
-            base = 1 + wk.loc[wsel, "vs_normal_pct"] / 100
-            f_dow = dow.get(d.dayofweek, 1.0) if dow is not None else 1.0
-            bucket = ("Start" if d.day <= 3 else "End" if d.day >= d.days_in_month - 2
-                      else "Early-mid" if d.day <= 15 else "Late-mid")
-            f_dom = dom.get(bucket, 1.0) if dom is not None else 1.0
-            fd.append({"city": city, "date": d, "dow": d.day_name()[:3],
-                       "day_vs_normal_pct": round((base * f_dow * f_dom - 1) * 100, 1),
-                       "event": future_cal.loc[d, "event"] if d in future_cal.index else ""})
+            # notable upcoming weeks: runs of high/low weeks, merged
+            t = cfg["forecast_threshold_pct"]
+            flag = np.where(fc.vs_normal_pct >= t, "High", np.where(fc.vs_normal_pct <= -t, "Low", ""))
+            runs, run = [], None
+            for i, f in enumerate(flag):
+                if f and run and run["type"] == f and i == run["end_i"] + 1:
+                    run["end_i"] = i
+                else:
+                    if run:
+                        runs.append(run)
+                    run = {"city": city, "kw": kw, "type": f, "start_i": i, "end_i": i} if f else None
+            if run:
+                runs.append(run)
+            for u in runs:
+                seg = fc.iloc[u["start_i"]:u["end_i"] + 1]
+                peak = seg.vs_normal_pct.abs().idxmax()
+                u.update({"from": seg.week_start.iloc[0], "to": seg.week_end.iloc[-1],
+                          "demand_vs_normal_pct": round(float(seg.vs_normal_pct.loc[peak]), 1),
+                          "suggestion": fc.suggestion.loc[peak],
+                          "past_cpc_this_month_pct": fc.past_cpc_this_month_pct.loc[peak],
+                          "events": ", ".join(sorted({e for e in seg.events if e}))[:200]})
+                up.append(u)
+
+            # next 90 days, day by day
+            dow, dom = daily_factors(trg)
+            wk = fc.set_index("week_start")
+            for d in pd.date_range(today, today + timedelta(days=89)):
+                ws = wk.index[wk.index <= d]
+                wsel = ws[-1] if len(ws) else wk.index[0]        # days before the first forecast week use it too
+                base = 1 + wk.loc[wsel, "vs_normal_pct"] / 100
+                f_dow = dow.get(d.dayofweek, 1.0) if dow is not None else 1.0
+                bucket = ("Start" if d.day <= 3 else "End" if d.day >= d.days_in_month - 2
+                          else "Early-mid" if d.day <= 15 else "Late-mid")
+                f_dom = dom.get(bucket, 1.0) if dom is not None else 1.0
+                fd.append({"city": city, "kw": kw, "date": d, "dow": d.day_name()[:3],
+                           "day_vs_normal_pct": round((base * f_dow * f_dom - 1) * 100, 1),
+                           "event": future_cal.loc[d, "event"] if d in future_cal.index else ""})
+
+    # weekly search trend per keyword (last 2 years), for the keyword chart
+    tw = []
+    since = today - timedelta(days=730)
+    for city in cities:
+        geo = cfg["city_to_geo"].get(city)
+        gd = tkw[(tkw.geo == geo) & (tkw.date >= since)] if geo else tkw.iloc[0:0]
+        if gd.empty:
+            continue
+        piv = gd.pivot_table(index="date", columns="kw", values="idx").sort_index()
+        piv[ALL] = piv.sum(axis=1, min_count=1)
+        wkly = piv.resample("W-MON", label="left", closed="left").mean()
+        wkly = wkly[piv.resample("W-MON", label="left", closed="left").size() == 7]
+        for kw in wkly.columns:
+            for d, v in wkly[kw].items():
+                if pd.notna(v):
+                    tw.append({"city": city, "kw": kw, "week_start": d, "idx": round(float(v), 2)})
+    out["Trends_Weekly_KW"] = pd.DataFrame(tw)
 
     cat = lambda L: pd.concat(L, ignore_index=True) if L else pd.DataFrame()
     out["Forecast_Weekly"] = cat(fw)
@@ -1422,7 +1534,9 @@ def build_planning(cfg, con, ads, trends):
     out["Forecast_Accuracy"] = pd.DataFrame(acc)
 
     # Locations: Trends city interest + Keyword Planner volume + our coverage
-    ci = q(con, "SELECT city, idx FROM trends_city_interest")
+    ci = q(con, "SELECT city, kw, idx FROM trends_city_kw")
+    if not ci.empty:
+        ci["idx"] = pd.to_numeric(ci.idx)
     kp = q(con, "SELECT city, keyword, grp, ym, searches, low_bid, high_bid FROM kp_monthly")
     if not kp.empty:
         kp["searches"] = pd.to_numeric(kp.searches)
@@ -1438,12 +1552,14 @@ def build_planning(cfg, con, ads, trends):
         ours = c
         tr = ci[ci.city.str.lower().isin([str(c).lower(), cfg["google_city_names"].get(ours, ours).lower()])] \
             if not ci.empty else ci
+        tri = tr.groupby("kw").idx.max().to_dict() if len(tr) else {}
         k = kp[(kp.city == ours) & (kp.keyword.str.lower() == cfg["forecast_keyword"])] if not kp.empty else kp
         gen = kp[(kp.city == ours) & (kp.grp == "Generic")] if not kp.empty else kp
         vol = float(k.sort_values("ym").searches.tail(12).mean()) if len(k) else None
         gvol = float(gen.groupby("ym").searches.sum().sort_index().tail(12).mean()) if len(gen) else None
         rows.append({"city": ours, "running_campaigns": ours in last30.index,
-                     "trends_interest_0_100": float(tr.idx.iloc[0]) if len(tr) else None,
+                     "trends_interest_0_100": tri.get(cfg["decision_keyword"]),
+                     **{f"interest: {k}": tri.get(k) for k in cfg["trends_keywords"]},
                      "monthly_searches_main_kw": vol, "monthly_searches_generic_total": gvol,
                      "top_of_page_bid_low": float(k.low_bid.iloc[-1]) if len(k) else None,
                      "top_of_page_bid_high": float(k.high_bid.iloc[-1]) if len(k) else None,
@@ -1467,18 +1583,150 @@ def build_planning(cfg, con, ads, trends):
 
 
 # =====================================================================
+# AT-A-GLANCE: one row per city, plain-language actions and insights
+# =====================================================================
+def _chg(a, b):
+    return None if (a is None or b is None or not b or pd.isna(a) or pd.isna(b)) else (a / b - 1) * 100
+
+
+def build_overview(cfg, ads, trends, sh):
+    today = pd.Timestamp(date.today())
+    mat = today - timedelta(days=cfg["maturity_days"] + 1)
+    dk = cfg["decision_keyword"]
+    fw = sh.get("Forecast_Weekly", pd.DataFrame())
+    up = sh.get("Upcoming_Changes", pd.DataFrame())
+    fw = fw[fw.kw == dk] if len(fw) and "kw" in fw else fw
+    up = up[up.kw == dk] if len(up) and "kw" in up else up
+    dowp, domp = sh.get("DOW_Profile", pd.DataFrame()), sh.get("DayOfMonth_Profile", pd.DataFrame())
+    summ = sh.get("Summary", pd.DataFrame())
+    rows, acts, ins = [], [], []
+    cities = ["All India"] + sorted(c for c in ads.city.unique() if c != "All India")
+    for city in cities:
+        a = ads[ads.city == city].set_index("date").sort_index()
+        if a.empty:
+            continue
+        end = a.index.max()
+        geo = cfg["city_to_geo"].get(city)
+        t = trends[trends.geo == geo].set_index("date")["idx"].sort_index() if geo else pd.Series(dtype=float)
+
+        # demand now: last 7 days of Trends vs its last-12-months average
+        d7 = None
+        if len(t) > 60:
+            d7 = _chg(t.iloc[-7:].mean(), t.iloc[-365:].mean())
+        # demand next 4 weeks from the forecast
+        n4 = None
+        f = fw[fw.city == city] if len(fw) else fw
+        if len(f):
+            n4 = float(f.vs_normal_pct.iloc[:4].mean())
+        # our side
+        w = lambda d0, d1: a[(a.index > d0) & (a.index <= d1)]
+        last7, prev28 = w(end - timedelta(days=7), end), w(end - timedelta(days=35), end - timedelta(days=7))
+        imp_chg = _chg(last7.impressions.sum() / 7, prev28.impressions.sum() / 28 if len(prev28) else None)
+        l14 = w(end - timedelta(days=14), end)
+        el = (l14.impressions / l14.impr_share.where(l14.impr_share > 0)).fillna(0)
+        is14 = l14.impressions[el > 0].sum() / el.sum() if el.sum() else None
+        b14 = (l14.budget_lost_is.fillna(0) * el).sum() / el[l14.budget_lost_is.notna()].sum() \
+            if el[l14.budget_lost_is.notna()].sum() else None
+        r14 = (l14.rank_lost_is.fillna(0) * el).sum() / el[l14.rank_lost_is.notna()].sum() \
+            if el[l14.rank_lost_is.notna()].sum() else None
+        c30, cp30 = w(mat - timedelta(days=30), mat), w(mat - timedelta(days=60), mat - timedelta(days=30))
+        cpa30 = c30.cost.sum() / c30.conversions.sum() if c30.conversions.sum() else None
+        cpap = cp30.cost.sum() / cp30.conversions.sum() if cp30.conversions.sum() else None
+        cpa_chg = _chg(cpa30, cpap)
+        cost30 = w(end - timedelta(days=30), end).cost.sum()
+
+        # ---------- actions (plain language, max 3) ----------
+        A = []
+        pctf = lambda v: f"{v:+.0f}%"
+        if n4 is not None and n4 >= 10 and b14 is not None and b14 >= 0.10:
+            A.append(("Raise budget", f"Raise daily budget ~{int(min(40, max(10, round((n4 + b14 * 100) / 5) * 5)))}%",
+                      f"Demand next 4 weeks {pctf(n4)} vs normal and you already lose {b14:.0%} of impressions to budget."))
+        if n4 is not None and n4 >= 10 and r14 is not None and r14 >= 0.30:
+            A.append(("Raise bids", "Raise bids / tCPA ~10–15%",
+                      f"Demand is rising ({pctf(n4)}) and {r14:.0%} of impressions are lost to ad rank."))
+        if n4 is not None and n4 >= 10 and not A:
+            A.append(("Prepare", "Keep budget headroom",
+                      f"Demand next 4 weeks {pctf(n4)} vs normal; make sure budgets aren’t capped."))
+        if n4 is not None and n4 <= -10:
+            A.append(("Trim budget", f"Trim budget ~{int(min(30, round(-n4 / 5) * 5))}%, hold bids",
+                      f"Demand next 4 weeks {pctf(n4)} vs normal; fewer searches to buy."))
+        if r14 is not None and r14 >= 0.40 and not any(x[0] == "Raise bids" for x in A):
+            A.append(("Weak ad rank", "Losing many auctions to ad rank",
+                      f"{r14:.0%} of eligible impressions lost to rank in 14 days: check bids/tCPA, ad strength, landing page."))
+        if b14 is not None and b14 >= 0.15 and not any(x[0] == "Raise budget" for x in A):
+            A.append(("Budget-capped", "Budget is limiting reach",
+                      f"{b14:.0%} of eligible impressions lost to budget in the last 14 days."))
+        if cpa_chg is not None and cpa_chg >= 25 and (d7 is None or abs(d7) < 10):
+            A.append(("Check efficiency", "CPA rising without a demand change",
+                      f"CPA {pctf(cpa_chg)} vs the previous 30 days while demand is normal: review search terms, bids, landing page."))
+        if imp_chg is not None and imp_chg <= -15 and d7 is not None and d7 >= -5:
+            A.append(("Missed demand", "Impressions down while demand is steady",
+                      f"Impressions {pctf(imp_chg)} vs the previous 4 weeks, demand {pctf(d7)}: check budgets, disapprovals, paused campaigns."))
+        if not A:
+            A.append(("On track", "No change needed", "Demand and delivery look normal."))
+        for i, (kind, title, why) in enumerate(A[:3]):
+            acts.append({"city": city, "rank": i + 1, "kind": kind, "action": title, "why": why})
+
+        # ---------- quick insights ----------
+        I = []
+        if d7 is not None:
+            I.append(f"Demand last 7 days: {pctf(d7)} vs its 12-month average.")
+        p = dowp[dowp.city == city] if len(dowp) else dowp
+        if len(p) and p.trends_index_rel.notna().any():
+            hi, lo = p.loc[p.trends_index_rel.idxmax()], p.loc[p.trends_index_rel.idxmin()]
+            I.append(f"Busiest search day: {hi.dow} ({hi.trends_index_rel - 100:+.0f}%); quietest: {lo.dow} ({lo.trends_index_rel - 100:+.0f}%).")
+        p = domp[domp.city == city] if len(domp) else domp
+        if len(p) and p.trends_index_rel.notna().any():
+            e = p.set_index("dom_bucket").trends_index_rel
+            ends = e.reindex(["Start (1-3)", "End (last 3)"]).mean()
+            mid = e.reindex(["Early-mid (4-15)", "Late-mid (16-end-3)"]).mean()
+            if pd.notna(ends) and pd.notna(mid):
+                I.append(f"Month start/end vs mid-month: {ends / mid * 100 - 100:+.0f}% demand (rent-cycle effect).")
+        if len(f):
+            m = f.assign(mn=pd.to_datetime(f.week_start).dt.strftime("%b")).groupby("mn", sort=False).vs_normal_pct.mean()
+            peak = [k for k, v in m.items() if v >= 8]
+            quiet = [k for k, v in m.items() if v <= -8]
+            if peak:
+                I.append(f"Peak months ahead: {', '.join(peak)}.")
+            if quiet:
+                I.append(f"Quiet months ahead: {', '.join(quiet)}.")
+        u = up[up.city == city] if len(up) else up
+        if len(u):
+            nx = u.iloc[0]
+            I.append(f"Next big shift: {'busier' if nx['type'] == 'High' else 'quieter'} from "
+                     f"{pd.Timestamp(nx['from']).strftime('%d %b')} to {pd.Timestamp(nx['to']).strftime('%d %b')} "
+                     f"({nx['demand_vs_normal_pct']:+.0f}%).")
+        sm = summ[summ.city == city] if len(summ) else summ
+        if len(sm) and pd.notna(sm["best_lag_days (impr follow trends)"].iloc[0]):
+            lag = int(sm["best_lag_days (impr follow trends)"].iloc[0])
+            if lag > 0:
+                I.append(f"Your impressions react about {lag} day{'s' if lag != 1 else ''} after demand moves.")
+        for i, text in enumerate(I):
+            ins.append({"city": city, "rank": i + 1, "insight": text})
+
+        rows.append({"city": city, "demand_now_pct": d7, "demand_next4w_pct": n4,
+                     "outlook": None if n4 is None else ("Rising" if n4 >= 10 else "Falling" if n4 <= -10 else "Steady"),
+                     "impressions_7d_vs_prev_pct": imp_chg, "impr_share_14d": is14,
+                     "lost_to_budget_14d": b14, "lost_to_rank_14d": r14,
+                     "cpa_30d_incl_gst": cpa30, "cpa_change_pct": cpa_chg, "cost_30d_incl_gst": cost30,
+                     "conversions_30d": c30.conversions.sum(), "top_action": A[0][1], "action_kind": A[0][0]})
+    return {"Overview": pd.DataFrame(rows), "Actions": pd.DataFrame(acts), "Insights": pd.DataFrame(ins)}
+
+
+# =====================================================================
 # CLOUD MODE (GitHub Actions): refresh, then save dashboard data + Excel into TiDB
 # =====================================================================
 def save_cache(cfg, sheets):
-    payload = {"meta": {"account": cfg["customer_id"], "filter": cfg["campaign_name_regex"],
+    payload = {"meta": {"keywords": cfg["trends_keywords"], "decision_keyword": cfg["decision_keyword"],
+                        "account": cfg["customer_id"], "filter": cfg["campaign_name_regex"],
                         "gst": cfg["gst_multiplier"], "refresh_time": "09:00 IST"}}
     if sheets is None:
         payload["empty"] = True
         xbytes = None
     else:
-        for k in ["Summary", "Weekly", "DOW_Profile", "DayOfMonth_Profile", "Month_Profile",
+        for k in ["Overview", "Actions", "Insights", "Summary", "Weekly", "DOW_Profile", "DayOfMonth_Profile", "Month_Profile",
                   "Spikes_Tagged", "Notes", "Forecast_Weekly", "Forecast_Daily", "Upcoming_Changes",
-                  "Forecast_Accuracy", "Locations", "KP_Monthly", "KP_Keywords"]:
+                  "Forecast_Accuracy", "Locations", "KP_Monthly", "KP_Keywords", "Trends_Weekly_KW"]:
             payload[k] = _records(sheets.get(k))
         write_xlsx(cfg, sheets)
         xbytes = open(cfg["output_xlsx"], "rb").read()
