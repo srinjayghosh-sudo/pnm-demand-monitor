@@ -643,6 +643,9 @@ def trends_daily_update(con, geo, cfg, end):
 # =====================================================================
 # DAILY RUN / BACKFILL
 # =====================================================================
+_STATE = {}
+
+
 def run_refresh(cfg, backfill=False):
     con = db_connect(cfg)
     today = pd.Timestamp(date.today())
@@ -699,6 +702,14 @@ def run_refresh(cfg, backfill=False):
     log(con, "refresh-ok", f"data up to {yday.date()}")   # Google Ads part is done
     con.close()
 
+    _STATE["trends_plan"] = (cities, have, yday)
+
+
+def run_trends_daily(cfg):
+    """Daily Google Trends per state. Runs after the 5-year pulls, which matter more."""
+    if "trends_plan" not in _STATE:
+        return
+    cities, have, yday = _STATE.pop("trends_plan")
     hist_start = pd.Timestamp(cfg["backfill_start"])
     new_budget = cfg["trends_new_states_per_run"]
     geos = {cfg["city_to_geo"][c] for c in cities if c in cfg["city_to_geo"]} | {"IN"}
@@ -1378,6 +1389,8 @@ def run_planning_jobs(cfg):
                 if c not in ids:
                     log(con, "warn", f"Keyword Planner: no Google location found for {c}")
                     continue
+                if _STATE.get("kp_blocked"):
+                    break
                 try:
                     rows = pull_kp(api, cfg, ids[c])
                     con = db_connect(cfg)
@@ -1389,9 +1402,18 @@ def run_planning_jobs(cfg):
                         [(c, *r, now) for r in rows])
                     _job_done(con, f"kp:{c}", f"{len(rows)} rows")
                 except Exception as e:
-                    log(con, "kp-error", f"{c}: {str(e)[:300]}")
+                    if "DEVELOPER_TOKEN_NOT_APPROVED" in str(e) or "explorer access" in str(e):
+                        _STATE["kp_blocked"] = True
+                        for c2 in due:
+                            _job_done(con, f"kp:{c2}", "needs Basic access")
+                        log(con, "warn", "Keyword Planner needs Basic or Standard Google Ads API access "
+                                         "(you have Explorer). Search volumes and brand data are paused; "
+                                         "the script retries in 30 days.")
+                        break
+                    log(con, "warn", f"Keyword Planner {c}: {str(e)[:300]}")
                 time.sleep(2)
-            log(con, "volumes", f"Keyword Planner updated for {len(due)} locations")
+            if not _STATE.get("kp_blocked"):
+                log(con, "volumes", f"Keyword Planner updated for {len(due)} locations")
     except Exception as e:
         con = db_connect(cfg); log(con, "kp-error", str(e)[:300])
     con.close()
@@ -1687,12 +1709,14 @@ def pull_weather_and_macro(cfg, con, cities):
                         rows.append((name, int(it["date"]), float(it["value"]), now))
             except Exception as e:
                 log(con, "warn", f"macro {name}: {str(e)[:200]}")
+        got = {r[0] for r in rows}
         if rows:
             con.cursor().executemany(
                 "INSERT INTO macro_annual (indicator, year, value, fetched_at) VALUES (%s,%s,%s,%s) "
                 "ON DUPLICATE KEY UPDATE value = VALUES(value), fetched_at = VALUES(fetched_at)", rows)
-            _job_done(con, "macro", f"{len(rows)} values")
-            log(con, "macro", f"{len(rows)} values")
+            if got >= set(cfg["macro_indicators"]):
+                _job_done(con, "macro", f"{len(rows)} values")
+            log(con, "macro", f"{len(rows)} values ({', '.join(sorted(got))})")
 
 
 def _clean_event(e):
@@ -1883,6 +1907,13 @@ def build_overview(cfg, ads, trends, sh):
         last7, prev28 = w(end - timedelta(days=7), end), w(end - timedelta(days=35), end - timedelta(days=7))
         imp_chg = _chg(last7.impressions.sum() / 7, prev28.impressions.sum() / 28 if len(prev28) else None)
         l14 = w(end - timedelta(days=14), end)
+        base = w(end - timedelta(days=74), end - timedelta(days=14))      # the 60 days before: "normal"
+
+        def wavg(df, col):
+            e = (df.impressions / df.impr_share.where(df.impr_share > 0)).fillna(0)
+            m = df[col].notna() & (e > 0)
+            return (df[col][m] * e[m]).sum() / e[m].sum() if e[m].sum() else None
+        r_base, b_base = wavg(base, "rank_lost_is"), wavg(base, "budget_lost_is")
         el = (l14.impressions / l14.impr_share.where(l14.impr_share > 0)).fillna(0)
         is14 = l14.impressions[el > 0].sum() / el.sum() if el.sum() else None
         b14 = (l14.budget_lost_is.fillna(0) * el).sum() / el[l14.budget_lost_is.notna()].sum() \
@@ -1910,12 +1941,20 @@ def build_overview(cfg, ads, trends, sh):
         if n4 is not None and n4 <= -10:
             A.append(("Trim budget", f"Trim budget ~{int(min(30, round(-n4 / 5) * 5))}%, hold bids",
                       f"Demand next 4 weeks {pctf(n4)} vs normal; fewer searches to buy."))
-        if r14 is not None and r14 >= 0.40 and not any(x[0] == "Raise bids" for x in A):
-            A.append(("Weak ad rank", "Losing many auctions to ad rank",
-                      f"{r14:.0%} of eligible impressions lost to rank in 14 days: check bids/tCPA, ad strength, landing page."))
-        if b14 is not None and b14 >= 0.15 and not any(x[0] == "Raise budget" for x in A):
-            A.append(("Budget-capped", "Budget is limiting reach",
-                      f"{b14:.0%} of eligible impressions lost to budget in the last 14 days."))
+        # rank / budget: flag a clear worsening vs this city's own normal, or extreme levels
+        if r14 is not None and not any(x[0] == "Raise bids" for x in A):
+            if r_base is not None and r14 - r_base >= 0.08:
+                A.append(("Weak ad rank", "Losing more auctions to ad rank",
+                          f"Lost to rank {r14:.0%} vs your normal {r_base:.0%}: competitors may be bidding up. "
+                          f"Check bids/tCPA and ad strength."))
+            elif r14 >= 0.65:
+                A.append(("Weak ad rank", "Ad rank is very weak",
+                          f"{r14:.0%} of eligible impressions lost to rank: review bids/tCPA, ads and landing page."))
+        if b14 is not None and not any(x[0] == "Raise budget" for x in A):
+            if b14 >= 0.15 and (b_base is None or b14 - b_base >= -0.02):
+                A.append(("Budget-capped", "Budget is limiting reach",
+                          f"{b14:.0%} of eligible impressions lost to budget in 14 days"
+                          + (f" (normal {b_base:.0%})." if b_base is not None else ".")))
         if cpa_chg is not None and cpa_chg >= 25 and (d7 is None or abs(d7) < 10):
             A.append(("Check efficiency", "CPA rising without a demand change",
                       f"CPA {pctf(cpa_chg)} vs the previous 30 days while demand is normal: review search terms, bids, landing page."))
@@ -2001,6 +2040,7 @@ def build_overview(cfg, ads, trends, sh):
                      "outlook": None if n4 is None else ("Rising" if n4 >= 10 else "Falling" if n4 <= -10 else "Steady"),
                      "impressions_7d_vs_prev_pct": imp_chg, "impr_share_14d": is14,
                      "lost_to_budget_14d": b14, "lost_to_rank_14d": r14,
+                     "lost_to_budget_normal": b_base, "lost_to_rank_normal": r_base,
                      "cpa_30d_incl_gst": cpa30, "cpa_change_pct": cpa_chg, "cost_30d_incl_gst": cost30,
                      "conversions_30d": c30.conversions.sum(), "top_action": A[0][1], "action_kind": A[0][0]})
     return {"Overview": pd.DataFrame(rows), "Actions": pd.DataFrame(acts), "Insights": pd.DataFrame(ins)}
@@ -2028,6 +2068,18 @@ def save_cache(cfg, sheets):
             print("Excel too large to store in TiDB; skipping the Excel copy.")
             xbytes = None
     con = db_connect(cfg)
+    try:   # recent notes (not errors) the dashboard should show, newest first, one per topic
+        wn = q(con, "SELECT run_at, detail FROM run_log WHERE step = 'warn' ORDER BY id DESC LIMIT 30")
+        seen, notes = set(), []
+        for _, r in wn.iterrows():
+            key = r.detail.split(":")[0][:40]
+            if key not in seen and r.run_at >= (datetime.now() - timedelta(days=3)).isoformat():
+                seen.add(key); notes.append(r.detail)
+        payload["meta"]["notices"] = notes[:4]
+        payload["meta"]["kp_blocked"] = any("Keyword Planner needs Basic" in n for n in notes) or \
+            not q(con, "SELECT job FROM job_runs WHERE note = 'needs Basic access' LIMIT 1").empty
+    except Exception:
+        pass
     con.cursor().execute(
         "INSERT INTO dashboard_cache (id, payload, xlsx, updated_at) VALUES ('main', %s, %s, %s) "
         "ON DUPLICATE KEY UPDATE payload = VALUES(payload), xlsx = VALUES(xlsx), updated_at = VALUES(updated_at)",
@@ -2047,9 +2099,13 @@ def cloud_run(cfg, backfill=False):
         except Exception:
             pass
     try:
-        run_planning_jobs(cfg)
+        run_planning_jobs(cfg)             # 5-year Trends, rental signal, cities, weather, macro first
     except Exception as e:
         print("planning jobs:", e)
+    try:
+        run_trends_daily(cfg)              # then the bulkier daily Trends history
+    except Exception as e:
+        print("daily trends:", e)
     save_cache(cfg, build_sheets(cfg))     # always rebuild from whatever is stored
     if failed:
         raise SystemExit(f"Refresh failed: {failed}")
