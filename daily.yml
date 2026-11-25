@@ -2,7 +2,7 @@ name: Daily P&M update
 
 on:
   schedule:
-    - cron: "30 3 * * *"      # 03:30 UTC = 09:00 IST (GitHub may start it a little late)
+    - cron: "30 23 * * *"     # 23:30 UTC = 05:00 IST next morning (GitHub may start it a little late)
   workflow_dispatch:           # adds the "Run workflow" button
 
 jobs:
