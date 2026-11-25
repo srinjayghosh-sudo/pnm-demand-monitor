@@ -56,7 +56,8 @@ CONFIG = {
 
     # ---------- Refresh rules ----------
     "maturity_days": 7,            # conversions re-fetched for this many days back
-    "refresh_cols": ["conversions", "impr_share", "budget_lost_is", "rank_lost_is"],  # re-pulled for 7 days
+    "refresh_cols": ["impressions", "clicks", "cost", "conversions", "impr_share",
+                     "budget_lost_is", "rank_lost_is"],  # re-pulled for 7 days (late Google Ads corrections)
     "backfill_start": "2024-11-01",
 
     # ---------- Google Trends ----------
@@ -80,6 +81,24 @@ CONFIG = {
         "Competitors": ["nobroker packers and movers", "agarwal packers and movers",
                         "leo packers and movers"],
     },
+    # ---- external factors ----
+    # Social trend leading indicators: searches people make BEFORE they move
+    "indicator_keywords": ["house for rent", "rent agreement", "flat for rent"],
+    "heavy_rain_mm": 20,                 # a day with at least this much rain counts as a heavy-rain day
+    "weather_refresh_days": 7,
+    "macro_refresh_days": 30,
+    # World Bank indicators for India (free, open licence)
+    "macro_indicators": {"GDP growth %": "NY.GDP.MKTP.KD.ZG", "CPI inflation %": "FP.CPI.TOTL.ZG",
+                         "Urban population growth %": "SP.URB.GROW"},
+    # city centre coordinates for daily rainfall (NASA POWER)
+    "city_coords": {"Mumbai": (19.076, 72.878), "Pune": (18.520, 73.857), "Nagpur": (21.146, 79.088),
+                    "Thane": (19.218, 72.978), "Navi Mumbai": (19.033, 73.030), "Delhi": (28.614, 77.209),
+                    "New Delhi": (28.614, 77.209), "Bangalore": (12.972, 77.595), "Bengaluru": (12.972, 77.595),
+                    "Hyderabad": (17.385, 78.487), "Chennai": (13.083, 80.271), "Coimbatore": (11.017, 76.956),
+                    "Kolkata": (22.573, 88.364), "Ahmedabad": (23.023, 72.571), "Surat": (21.170, 72.831),
+                    "Jaipur": (26.912, 75.787), "Lucknow": (26.847, 80.946), "Noida": (28.536, 77.391),
+                    "Gurgaon": (28.460, 77.027), "Gurugram": (28.460, 77.027), "Chandigarh": (30.733, 76.779),
+                    "Indore": (22.720, 75.858), "Kochi": (9.931, 76.267), "Ludhiana": (30.901, 75.857)},
     # Google's own city names where they differ from ours (Keyword Planner + Trends city view)
     "google_city_names": {"Bangalore": "Bengaluru", "Gurgaon": "Gurugram", "Delhi": "New Delhi"},  # recent days overwritten each run (Trends can revise them)
     # State-level only for India; cities in one state share a line. Verify codes on trends.google.com
@@ -177,6 +196,15 @@ def db_connect(cfg):
         cur.execute("""CREATE TABLE IF NOT EXISTS trends_city_kw (
             city VARCHAR(64) NOT NULL, kw VARCHAR(64) NOT NULL, idx DOUBLE, fetched_at VARCHAR(19),
             PRIMARY KEY (city, kw))""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS trends_indicator_5y (
+            geo VARCHAR(16) NOT NULL, kw VARCHAR(64) NOT NULL, week VARCHAR(10) NOT NULL, idx DOUBLE,
+            fetched_at VARCHAR(19), PRIMARY KEY (geo, kw, week))""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS weather_daily (
+            city VARCHAR(64) NOT NULL, date VARCHAR(10) NOT NULL, rain_mm DOUBLE, fetched_at VARCHAR(19),
+            PRIMARY KEY (city, date))""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS macro_annual (
+            indicator VARCHAR(64) NOT NULL, year INT NOT NULL, value DOUBLE, fetched_at VARCHAR(19),
+            PRIMARY KEY (indicator, year))""")
         cur.execute("""CREATE TABLE IF NOT EXISTS trends_weekly_5y (
             geo VARCHAR(16) NOT NULL, week VARCHAR(10) NOT NULL, idx DOUBLE, fetched_at VARCHAR(19),
             PRIMARY KEY (geo, week))""")
@@ -925,6 +953,10 @@ def build_sheets(cfg):
     except Exception as e:
         print("planning analysis:", e)
     try:
+        sheets.update(build_external(cfg, con, ads, trends, sheets))
+    except Exception as e:
+        print("external factors:", e)
+    try:
         ov = build_overview(cfg, ads, trends, sheets)
         sheets = {"Overview": ov["Overview"], "Actions": ov["Actions"], "Insights": ov["Insights"], **sheets}
     except Exception as e:
@@ -1299,9 +1331,27 @@ def run_planning_jobs(cfg):
                              for d, row in s5.iterrows() for kw, v in row.items() if pd.notna(v)])
             _job_done(con, f"t5y:{geo}", f"{len(s5)} weeks")
             log(con, "forecast-data", f"{geo}: {len(s5)} weeks")
+            time.sleep(15)
+            try:
+                ind = pull_indicators_5y(geo, cfg)
+                con = db_connect(cfg)
+                cur = con.cursor()
+                cur.execute("DELETE FROM trends_indicator_5y WHERE geo = %s", (geo,))
+                cur.executemany("INSERT INTO trends_indicator_5y (geo, kw, week, idx, fetched_at) VALUES (%s,%s,%s,%s,%s)",
+                                [(geo, kw, d.strftime("%Y-%m-%d"), float(v), now)
+                                 for d, row in ind.iterrows() for kw, v in row.items() if pd.notna(v)])
+                log(con, "signals", f"{geo}: rental-search history {len(ind)} weeks")
+            except Exception as e:
+                con = db_connect(cfg); log(con, "trends-error", f"indicators {geo}: {str(e)[:300]}")
         except Exception as e:
             con = db_connect(cfg); log(con, "trends-error", f"5y {geo}: {str(e)[:300]}")
         time.sleep(15)
+
+    # 1b) daily rainfall (NASA POWER) and macro context (World Bank)
+    try:
+        pull_weather_and_macro(cfg, con, cities)
+    except Exception as e:
+        con = db_connect(cfg); log(con, "warn", f"weather/macro: {str(e)[:300]}")
 
     # 2) Trends interest by city across India
     if _job_due(con, "trends-cities", cfg["forecast_refresh_days"]):
@@ -1583,6 +1633,213 @@ def build_planning(cfg, con, ads, trends):
 
 
 # =====================================================================
+# EXTERNAL FACTORS: social leading signals, festivals, weather, macro context
+# =====================================================================
+def pull_indicators_5y(geo, cfg):
+    """5 years of weekly Trends for searches people make before moving (rent listings, rent agreements)."""
+    def go():
+        py = _trends_client()
+        py.build_payload(cfg["indicator_keywords"][:5], timeframe="today 5-y", geo=geo)
+        d = py.interest_over_time()
+        if "isPartial" in d.columns:
+            d = d[~d["isPartial"].astype(bool)].drop(columns="isPartial")
+        return d.astype(float)
+    return _with_retry(go, f"Trends indicators {geo}")
+
+
+def pull_weather_and_macro(cfg, con, cities):
+    now = datetime.now().isoformat(timespec="seconds")
+    # daily rainfall per city from NASA POWER (public, no key)
+    for c in cities:
+        if c == "All India" or c not in cfg["city_coords"]:
+            continue
+        if not _job_due(con, f"wx:{c}", cfg["weather_refresh_days"]):
+            continue
+        lat, lon = cfg["city_coords"][c]
+        start = pd.Timestamp(cfg["backfill_start"]).strftime("%Y%m%d")
+        end = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
+        url = ("https://power.larc.nasa.gov/api/temporal/daily/point?parameters=PRECTOTCORR&community=AG"
+               f"&longitude={lon}&latitude={lat}&start={start}&end={end}&format=JSON")
+        try:
+            r = requests.get(url, timeout=120)
+            r.raise_for_status()
+            vals = r.json()["properties"]["parameter"]["PRECTOTCORR"]
+            rows = [(c, f"{k[:4]}-{k[4:6]}-{k[6:]}", float(v), now) for k, v in vals.items() if v is not None and v > -900]
+            con = db_connect(cfg)
+            con.cursor().executemany(
+                "INSERT INTO weather_daily (city, date, rain_mm, fetched_at) VALUES (%s,%s,%s,%s) "
+                "ON DUPLICATE KEY UPDATE rain_mm = VALUES(rain_mm), fetched_at = VALUES(fetched_at)", rows)
+            _job_done(con, f"wx:{c}", f"{len(rows)} days")
+        except Exception as e:
+            log(con, "warn", f"rainfall {c}: {str(e)[:200]}")
+        time.sleep(1)
+    # annual macro indicators for India from the World Bank (open data)
+    if _job_due(con, "macro", cfg["macro_refresh_days"]):
+        rows = []
+        for name, code in cfg["macro_indicators"].items():
+            try:
+                r = requests.get(f"https://api.worldbank.org/v2/country/IND/indicator/{code}?format=json&per_page=20",
+                                 timeout=60)
+                r.raise_for_status()
+                js = r.json()
+                for it in (js[1] if isinstance(js, list) and len(js) > 1 and js[1] else []):
+                    if it.get("value") is not None:
+                        rows.append((name, int(it["date"]), float(it["value"]), now))
+            except Exception as e:
+                log(con, "warn", f"macro {name}: {str(e)[:200]}")
+        if rows:
+            con.cursor().executemany(
+                "INSERT INTO macro_annual (indicator, year, value, fetched_at) VALUES (%s,%s,%s,%s) "
+                "ON DUPLICATE KEY UPDATE value = VALUES(value), fetched_at = VALUES(fetched_at)", rows)
+            _job_done(con, "macro", f"{len(rows)} values")
+            log(con, "macro", f"{len(rows)} values")
+
+
+def _clean_event(e):
+    e = re.sub(r"^\[[^\]]*\]\s*", "", e.strip())
+    return re.sub(r"\s*\(estimated\)", "", e).strip()
+
+
+def lead_signal(ind, dem, max_lag=8):
+    """Does the indicator move before demand? Uses 4-week % changes (seasonality-neutral),
+    tests lags 1..max_lag weeks and returns the best positive relationship."""
+    both = pd.concat([ind, dem], axis=1, keys=["ind", "dem"]).dropna()
+    if len(both) < 104:
+        return None
+    ci = both.ind.pct_change(4)
+    cd = both.dem.pct_change(4)
+    best = None
+    for L in range(1, max_lag + 1):
+        x, y = ci.shift(L), cd
+        ok = x.notna() & y.notna() & np.isfinite(x) & np.isfinite(y)
+        if ok.sum() < 60:
+            continue
+        r = float(np.corrcoef(x[ok], y[ok])[0, 1])
+        if best is None or r > best["r"]:
+            slope = float(np.polyfit(x[ok], y[ok], 1)[0])
+            best = {"lag_weeks": L, "r": r, "slope": slope}
+    if best is None:
+        return None
+    latest = ci.dropna()
+    best["indicator_4w_change_pct"] = float(latest.iloc[-1] * 100) if len(latest) else None
+    best["expected_demand_change_pct"] = (best["slope"] * latest.iloc[-1] * 100) if len(latest) else None
+    best["as_of_week"] = both.index[-1]
+    best["strength"] = "strong" if best["r"] >= 0.5 else "moderate" if best["r"] >= 0.3 else "weak"
+    return best
+
+
+def build_external(cfg, con, ads, trends, sh):
+    """Sheets: Leading_Signal, Leading_Weekly, Event_Impact, Weather_Impact, Macro_Context."""
+    out = {}
+    dk = cfg["decision_keyword"]
+    today = pd.Timestamp(date.today())
+    cities = ["All India"] + sorted(c for c in ads.city.unique() if c != "All India")
+    ind = q(con, "SELECT geo, kw, week, idx FROM trends_indicator_5y")
+    w5 = q(con, "SELECT geo, kw, week, idx FROM trends_weekly_5y_kw WHERE kw = %s", (dk,))
+    for d in (ind, w5):
+        if len(d):
+            d["idx"] = pd.to_numeric(d.idx)
+            d["week"] = pd.to_datetime(d.week)
+
+    # 1) social leading signal: rental searches -> packers demand
+    sig, lw = [], []
+    for city in cities:
+        geo = cfg["city_to_geo"].get(city)
+        gi, gd = ind[ind.geo == geo], w5[w5.geo == geo]
+        if gi.empty or gd.empty:
+            continue
+        si = gi.groupby("week").idx.sum().sort_index()
+        sd = gd.set_index("week").idx.sort_index()
+        res = lead_signal(si, sd)
+        if res:
+            sig.append({"city": city, "trends_geo": geo, **res})
+        both = pd.concat([si, sd], axis=1, keys=["rental_searches", "demand"]).dropna()
+        both = both[both.index >= today - timedelta(days=730)]
+        for wk, r in both.iterrows():
+            lw.append({"city": city, "week_start": wk, "rental_searches": r.rental_searches, "demand": r.demand})
+    out["Leading_Signal"] = pd.DataFrame(sig)
+    out["Leading_Weekly"] = pd.DataFrame(lw)
+
+    # 2) festivals / holidays / your events: typical effect on demand, and when they come next
+    ev = []
+    hist_cal = build_calendar(cfg, pd.Timestamp(cfg["backfill_start"]), today)
+    fut_cal = build_calendar(cfg, today, today + timedelta(days=365))
+    nxt = {}
+    for d, e in fut_cal.event.items():
+        for part in [x for x in e.split("; ") if x]:
+            n = _clean_event(part)
+            nxt.setdefault(n, d)
+    for city in cities:
+        geo = cfg["city_to_geo"].get(city)
+        t = trends[trends.geo == geo].set_index("date").idx.sort_index() if geo else pd.Series(dtype=float)
+        if len(t) < 120:
+            continue
+        ratio = t / t.rolling(29, center=True, min_periods=15).median()   # removes season + trend
+        dow_adj = ratio.groupby(ratio.index.dayofweek).transform("mean")
+        ratio = ratio / dow_adj                                           # removes the weekday effect
+        effects = {}
+        for d, e in hist_cal.event.items():
+            for part in [x for x in e.split("; ") if x]:
+                n = _clean_event(part)
+                win = ratio.loc[d - timedelta(days=1): d + timedelta(days=1)].dropna()
+                if len(win):
+                    effects.setdefault(n, []).append(float(win.mean() - 1) * 100)
+        for n, vals in effects.items():
+            ev.append({"city": city, "event": n, "times_seen": len(vals),
+                       "typical_effect_pct": round(float(np.mean(vals)), 1),
+                       "next_date": nxt.get(n)})
+    evdf = pd.DataFrame(ev)
+    if len(evdf):
+        evdf = evdf.sort_values(["city", "next_date"], na_position="last")
+    out["Event_Impact"] = evdf
+
+    # 3) weather: heavy-rain days vs normal days
+    wx = q(con, "SELECT city, date, rain_mm FROM weather_daily")
+    wrows = []
+    if len(wx):
+        wx["date"] = pd.to_datetime(wx.date)
+        wx["rain_mm"] = pd.to_numeric(wx.rain_mm)
+        for city in cities:
+            r = wx[wx.city == city].set_index("date").rain_mm.sort_index()
+            geo = cfg["city_to_geo"].get(city)
+            t = trends[trends.geo == geo].set_index("date").idx.sort_index() if geo else pd.Series(dtype=float)
+            imp = ads[ads.city == city].set_index("date").impressions.sort_index()
+            if r.empty:
+                continue
+            heavy = r[r >= cfg["heavy_rain_mm"]].index
+
+            def eff(sr):
+                if len(sr) < 120:
+                    return None
+                rr = sr / sr.rolling(29, center=True, min_periods=15).median()
+                rr = rr / rr.groupby(rr.index.dayofweek).transform("mean")
+                h = rr.reindex(heavy).dropna()
+                return round(float(h.mean() - 1) * 100, 1) if len(h) >= 5 else None
+            wrows.append({"city": city, "heavy_rain_days": int(len(heavy)),
+                          "demand_effect_pct": eff(t), "impressions_effect_pct": eff(imp),
+                          "rain_last_7d_mm": round(float(r[r.index > r.index.max() - timedelta(days=7)].sum()), 1),
+                          "heavy_rain_days_last_30d": int((r[r.index > r.index.max() - timedelta(days=30)]
+                                                           >= cfg["heavy_rain_mm"]).sum()),
+                          "data_until": r.index.max()})
+    out["Weather_Impact"] = pd.DataFrame(wrows)
+
+    # 4) macro context: India yearly indicators next to yearly demand change
+    mc = q(con, "SELECT indicator, year, value FROM macro_annual")
+    if len(mc):
+        mc["value"] = pd.to_numeric(mc.value)
+        m = mc.pivot_table(index="year", columns="indicator", values="value")
+        gi = w5[w5.geo == "IN"].set_index("week").idx if len(w5) else pd.Series(dtype=float)
+        if len(gi):
+            yr = gi.groupby(gi.index.year).mean()
+            cnt = gi.groupby(gi.index.year).size()
+            yr = yr[cnt >= 40]
+            m["Demand change % (packers and movers, India)"] = (yr / yr.shift(1) - 1) * 100
+        m = m[m.index >= today.year - 8].reset_index().sort_values("year", ascending=False)
+        out["Macro_Context"] = m.round(2)
+    return out
+
+
+# =====================================================================
 # AT-A-GLANCE: one row per city, plain-language actions and insights
 # =====================================================================
 def _chg(a, b):
@@ -1599,6 +1856,9 @@ def build_overview(cfg, ads, trends, sh):
     up = up[up.kw == dk] if len(up) and "kw" in up else up
     dowp, domp = sh.get("DOW_Profile", pd.DataFrame()), sh.get("DayOfMonth_Profile", pd.DataFrame())
     summ = sh.get("Summary", pd.DataFrame())
+    sigs = sh.get("Leading_Signal", pd.DataFrame())
+    evi = sh.get("Event_Impact", pd.DataFrame())
+    wxi = sh.get("Weather_Impact", pd.DataFrame())
     rows, acts, ins = [], [], []
     cities = ["All India"] + sorted(c for c in ads.city.unique() if c != "All India")
     for city in cities:
@@ -1662,9 +1922,32 @@ def build_overview(cfg, ads, trends, sh):
         if imp_chg is not None and imp_chg <= -15 and d7 is not None and d7 >= -5:
             A.append(("Missed demand", "Impressions down while demand is steady",
                       f"Impressions {pctf(imp_chg)} vs the previous 4 weeks, demand {pctf(d7)}: check budgets, disapprovals, paused campaigns."))
+        # external factors: social leading signal, festivals in the next 14 days
+        sg = sigs[sigs.city == city] if len(sigs) else sigs
+        sig = sg.iloc[0] if len(sg) else None
+        if sig is not None and sig["r"] >= 0.3 and pd.notna(sig["expected_demand_change_pct"]):
+            x = float(sig["expected_demand_change_pct"])
+            if x >= 8:
+                A.append(("Early signal", f"Demand likely up ~{x:.0f}% in ~{int(sig['lag_weeks'])} weeks",
+                          f"Rental searches moved {sig['indicator_4w_change_pct']:+.0f}% in 4 weeks; they usually lead "
+                          f"moving demand by {int(sig['lag_weeks'])} weeks ({sig['strength']} link). Line up budget now."))
+            elif x <= -8:
+                A.append(("Early signal", f"Demand likely down ~{-x:.0f}% in ~{int(sig['lag_weeks'])} weeks",
+                          f"Rental searches moved {sig['indicator_4w_change_pct']:+.0f}% in 4 weeks; they usually lead "
+                          f"moving demand by {int(sig['lag_weeks'])} weeks ({sig['strength']} link). Avoid over-spending."))
+        ec = evi[(evi.city == city) & evi.next_date.notna()] if len(evi) else evi
+        if len(ec):
+            soon = ec[(pd.to_datetime(ec.next_date) <= today + timedelta(days=14)) & (ec.times_seen >= 1)]
+            for _, e in soon.sort_values("next_date").iterrows():
+                if e.typical_effect_pct <= -10:
+                    A.append(("Festival ahead", f"{e.event} on {pd.Timestamp(e.next_date).strftime('%d %b')}: lower bids that day",
+                              f"Demand typically {e.typical_effect_pct:+.0f}% around it (seen {int(e.times_seen)}×)."))
+                elif e.typical_effect_pct >= 10:
+                    A.append(("Festival ahead", f"{e.event} on {pd.Timestamp(e.next_date).strftime('%d %b')}: keep budget open",
+                              f"Demand typically {e.typical_effect_pct:+.0f}% around it (seen {int(e.times_seen)}×)."))
         if not A:
             A.append(("On track", "No change needed", "Demand and delivery look normal."))
-        for i, (kind, title, why) in enumerate(A[:3]):
+        for i, (kind, title, why) in enumerate(A[:4]):
             acts.append({"city": city, "rank": i + 1, "kind": kind, "action": title, "why": why})
 
         # ---------- quick insights ----------
@@ -1696,6 +1979,16 @@ def build_overview(cfg, ads, trends, sh):
             I.append(f"Next big shift: {'busier' if nx['type'] == 'High' else 'quieter'} from "
                      f"{pd.Timestamp(nx['from']).strftime('%d %b')} to {pd.Timestamp(nx['to']).strftime('%d %b')} "
                      f"({nx['demand_vs_normal_pct']:+.0f}%).")
+        if sig is not None and sig["r"] >= 0.3:
+            I.append(f"Rental searches lead moving demand by ~{int(sig['lag_weeks'])} weeks here ({sig['strength']} link); "
+                     f"they changed {sig['indicator_4w_change_pct']:+.0f}% in the last 4 weeks.")
+        if len(ec):
+            big = ec[ec.typical_effect_pct.abs() >= 10].sort_values("next_date").head(2)
+            for _, e in big.iterrows():
+                I.append(f"{e.event} ({pd.Timestamp(e.next_date).strftime('%d %b')}): demand usually {e.typical_effect_pct:+.0f}%.")
+        wr = wxi[wxi.city == city] if len(wxi) else wxi
+        if len(wr) and pd.notna(wr.demand_effect_pct.iloc[0]) and abs(wr.demand_effect_pct.iloc[0]) >= 5:
+            I.append(f"Heavy-rain days (≥{cfg['heavy_rain_mm']} mm): demand {wr.demand_effect_pct.iloc[0]:+.0f}% vs a normal day.")
         sm = summ[summ.city == city] if len(summ) else summ
         if len(sm) and pd.notna(sm["best_lag_days (impr follow trends)"].iloc[0]):
             lag = int(sm["best_lag_days (impr follow trends)"].iloc[0])
@@ -1719,14 +2012,15 @@ def build_overview(cfg, ads, trends, sh):
 def save_cache(cfg, sheets):
     payload = {"meta": {"keywords": cfg["trends_keywords"], "decision_keyword": cfg["decision_keyword"],
                         "account": cfg["customer_id"], "filter": cfg["campaign_name_regex"],
-                        "gst": cfg["gst_multiplier"], "refresh_time": "09:00 IST"}}
+                        "gst": cfg["gst_multiplier"], "refresh_time": "05:00 IST"}}
     if sheets is None:
         payload["empty"] = True
         xbytes = None
     else:
         for k in ["Overview", "Actions", "Insights", "Summary", "Weekly", "DOW_Profile", "DayOfMonth_Profile", "Month_Profile",
                   "Spikes_Tagged", "Notes", "Forecast_Weekly", "Forecast_Daily", "Upcoming_Changes",
-                  "Forecast_Accuracy", "Locations", "KP_Monthly", "KP_Keywords", "Trends_Weekly_KW"]:
+                  "Forecast_Accuracy", "Locations", "KP_Monthly", "KP_Keywords", "Trends_Weekly_KW",
+                  "Leading_Signal", "Leading_Weekly", "Event_Impact", "Weather_Impact", "Macro_Context"]:
             payload[k] = _records(sheets.get(k))
         write_xlsx(cfg, sheets)
         xbytes = open(cfg["output_xlsx"], "rb").read()
