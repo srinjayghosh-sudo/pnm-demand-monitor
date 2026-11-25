@@ -709,7 +709,7 @@ def run_refresh(cfg, backfill=False):
     cities = q(con, "SELECT DISTINCT city FROM ads_campaign_daily")["city"].tolist()
     nogeo = [c for c in cities if c not in cfg["city_to_geo"] and c != "Unmapped"]
     if nogeo:
-        log(con, "warn", f"no Trends geo for: {nogeo}")
+        print(f"[info] no Trends region mapped for: {nogeo}")
     # Trends keyword changed? Old daily Trends were a different search -> rebuild them
     kw_note = "|".join(cfg["trends_keywords"])
     kr = q(con, "SELECT note FROM job_runs WHERE job = 'trends-keyword'")
@@ -1004,7 +1004,8 @@ def build_sheets(cfg):
         print("external factors:", e)
     try:
         ov = build_overview(cfg, ads, trends, sheets)
-        sheets = {"Overview": ov["Overview"], "Actions": ov["Actions"], "Insights": ov["Insights"], **sheets}
+        sheets = {"Budget_Board": ov["Budget_Board"], "Overview": ov["Overview"], "Actions": ov["Actions"],
+                  "Insights": ov["Insights"], **sheets}
     except Exception as e:
         print("overview:", e)
     con.close()
@@ -1742,15 +1743,20 @@ def pull_weather_and_macro(cfg, con, cities):
         rows = []
         for name, code in cfg["macro_indicators"].items():
             try:
-                r = requests.get(f"https://api.worldbank.org/v2/country/IND/indicator/{code}?format=json&per_page=20",
-                                 timeout=60)
+                for attempt in range(4):
+                    r = requests.get(f"https://api.worldbank.org/v2/country/IND/indicator/{code}?format=json&per_page=20",
+                                     timeout=60, headers={"User-Agent": "pnm-demand-monitor/1.0"})
+                    if r.status_code != 429:
+                        break
+                    time.sleep(10 * (attempt + 1))        # World Bank asks callers to slow down
                 r.raise_for_status()
                 js = r.json()
+                time.sleep(3)
                 for it in (js[1] if isinstance(js, list) and len(js) > 1 and js[1] else []):
                     if it.get("value") is not None:
                         rows.append((name, int(it["date"]), float(it["value"]), now))
             except Exception as e:
-                log(con, "warn", f"macro {name}: {str(e)[:200]}")
+                print(f"   macro {name} not fetched this run ({str(e)[:120]}); retries next run")
         got = {r[0] for r in rows}
         if rows:
             con.cursor().executemany(
@@ -1925,7 +1931,7 @@ def build_overview(cfg, ads, trends, sh):
     sigs = sh.get("Leading_Signal", pd.DataFrame())
     evi = sh.get("Event_Impact", pd.DataFrame())
     wxi = sh.get("Weather_Impact", pd.DataFrame())
-    rows, acts, ins = [], [], []
+    rows, acts, ins, budget_rows = [], [], [], []
     cities = ["All India"] + sorted(c for c in ads.city.unique() if c != "All India")
     for city in cities:
         a = ads[ads.city == city].set_index("date").sort_index()
@@ -2078,6 +2084,63 @@ def build_overview(cfg, ads, trends, sh):
         for i, text in enumerate(I):
             ins.append({"city": city, "rank": i + 1, "insight": text})
 
+        # ---------- budget board ----------
+        spend7 = w(end - timedelta(days=7), end).cost.sum() / 7
+        conv30 = c30.conversions.sum()
+        fa = sh.get("Forecast_Accuracy", pd.DataFrame())
+        fa = fa[(fa.city == city) & (fa.kw == dk)] if len(fa) and "kw" in fa else fa.iloc[0:0] if len(fa) else fa
+        err = float(fa.backtest_typical_error_pct.iloc[0]) if len(fa) and pd.notna(fa.backtest_typical_error_pct.iloc[0]) else None
+        why, nxt_steps = [], []
+        if cpa_chg is not None and cpa_chg >= 25:
+            chg = 0
+            why.append(f"CPA is {cpa_chg:+.0f}% vs the previous 30 days, so extra spend would be inefficient right now.")
+            nxt_steps += ["Review the search terms report and add negatives.", "Check ad strength and landing page.",
+                          "Revisit budget once CPA is back near normal."]
+        else:
+            base_d = n4 if n4 is not None else (d7 * 0.5 if d7 is not None else 0)
+            chg = float(np.clip(base_d, -30, 30))
+            if n4 is not None:
+                why.append(f"Demand over the next 4 weeks is expected {n4:+.0f}% vs a normal week.")
+            elif d7 is not None:
+                why.append(f"No 12-month outlook yet; demand right now is {d7:+.0f}% vs normal (used at half weight).")
+            if b14 is not None and b14 >= 0.10 and chg >= -5:
+                add = min(b14 * 100, 30) * 0.5
+                chg += add
+                why.append(f"{b14:.0%} of eligible impressions are lost to budget, so part of that is added back (+{add:.0f}%).")
+            chg = float(np.clip(round(chg / 5) * 5, -30, 40))
+            if chg > 0 and n4 is not None and n4 >= 10:
+                nxt_steps.append(f"Raise the daily budget by about {chg:.0f}% a few days before the busier period.")
+            elif chg > 0:
+                nxt_steps.append(f"Raise the daily budget by about {chg:.0f}% to recover impressions lost to budget.")
+            elif chg < 0:
+                nxt_steps.append(f"Lower the daily budget by about {-chg:.0f}% and keep bids unchanged.")
+            else:
+                nxt_steps.append("Keep the daily budget as it is.")
+        if r14 is not None and r_base is not None and r14 - r_base >= 0.08:
+            bid = "Raise tCPA / bids ~10%"
+            why.append(f"Lost to rank rose to {r14:.0%} from a normal {r_base:.0%}: competitors may be bidding up.")
+            nxt_steps.append("Raise tCPA or max CPC by about 10%, and check Auction Insights for new competitors.")
+        elif n4 is not None and n4 >= 10 and r14 is not None and r14 >= 0.30:
+            bid = "Raise tCPA / bids ~10%"
+            why.append(f"Demand is rising and {r14:.0%} of impressions are lost to ad rank, so budget alone won’t capture it.")
+            nxt_steps.append("Raise tCPA or max CPC by about 10% ahead of the rise.")
+        elif n4 is not None and n4 <= -10:
+            bid = "Hold bids"
+            nxt_steps.append("Hold bids to protect ad rank for when demand returns.")
+        else:
+            bid = "Hold bids"
+        nxt_steps.append("Check the result after 3–7 days: impression share up, CPA stable.")
+        conf = ("High" if (n4 is not None and err is not None and err <= 10 and b14 is not None) else
+                "Medium" if (n4 is not None or d7 is not None) else "Low")
+        budget_rows.append({"city": city, "avg_daily_spend_7d": round(spend7), "budget_change_pct": chg,
+                            "suggested_daily_budget": round(spend7 * (1 + chg / 100)),
+                            "bid_action": bid, "demand_now_pct": d7, "demand_next4w_pct": n4,
+                            "impr_share_14d": is14, "lost_to_budget_14d": b14, "lost_to_rank_14d": r14,
+                            "cpa_30d_incl_gst": cpa30, "cpa_change_pct": cpa_chg, "conversions_30d": conv30,
+                            "confidence": conf, "forecast_error_pct": err,
+                            "why": " ".join(why) if why else "Demand and delivery are normal.",
+                            "way_forward": " ".join(f"{i + 1}) {t}" for i, t in enumerate(nxt_steps))})
+
         rows.append({"city": city, "demand_now_pct": d7, "demand_next4w_pct": n4,
                      "outlook": None if n4 is None else ("Rising" if n4 >= 10 else "Falling" if n4 <= -10 else "Steady"),
                      "impressions_7d_vs_prev_pct": imp_chg, "impr_share_14d": is14,
@@ -2085,7 +2148,8 @@ def build_overview(cfg, ads, trends, sh):
                      "lost_to_budget_normal": b_base, "lost_to_rank_normal": r_base,
                      "cpa_30d_incl_gst": cpa30, "cpa_change_pct": cpa_chg, "cost_30d_incl_gst": cost30,
                      "conversions_30d": c30.conversions.sum(), "top_action": A[0][1], "action_kind": A[0][0]})
-    return {"Overview": pd.DataFrame(rows), "Actions": pd.DataFrame(acts), "Insights": pd.DataFrame(ins)}
+    return {"Overview": pd.DataFrame(rows), "Actions": pd.DataFrame(acts), "Insights": pd.DataFrame(ins),
+            "Budget_Board": pd.DataFrame(budget_rows)}
 
 
 # =====================================================================
@@ -2099,7 +2163,7 @@ def save_cache(cfg, sheets):
         payload["empty"] = True
         xbytes = None
     else:
-        for k in ["Overview", "Actions", "Insights", "Summary", "Weekly", "DOW_Profile", "DayOfMonth_Profile", "Month_Profile",
+        for k in ["Budget_Board", "Overview", "Actions", "Insights", "Summary", "Weekly", "Daily_Aligned", "DOW_Profile", "DayOfMonth_Profile", "Month_Profile",
                   "Spikes_Tagged", "Notes", "Forecast_Weekly", "Forecast_Daily", "Upcoming_Changes",
                   "Forecast_Accuracy", "Locations", "KP_Monthly", "KP_Keywords", "Trends_Weekly_KW",
                   "Leading_Signal", "Leading_Weekly", "Event_Impact", "Weather_Impact", "Macro_Context"]:
@@ -2111,11 +2175,15 @@ def save_cache(cfg, sheets):
             xbytes = None
     con = db_connect(cfg)
     try:   # recent notes (not errors) the dashboard should show, newest first, one per topic
-        wn = q(con, "SELECT run_at, detail FROM run_log WHERE step = 'warn' ORDER BY id DESC LIMIT 30")
+        since = _STATE.get("run_start", (datetime.now() - timedelta(hours=6)).isoformat(timespec="seconds"))
+        wn = q(con, "SELECT run_at, detail FROM run_log WHERE step = 'warn' AND run_at >= %s ORDER BY id DESC LIMIT 30",
+               (since,))
         seen, notes = set(), []
         for _, r in wn.iterrows():
+            if "no Trends geo" in r.detail:
+                continue
             key = r.detail.split(":")[0][:40]
-            if key not in seen and r.run_at >= (datetime.now() - timedelta(days=3)).isoformat():
+            if key not in seen:
                 seen.add(key); notes.append(r.detail)
         payload["meta"]["notices"] = notes[:4]
         payload["meta"]["kp_blocked"] = any("Keyword Planner needs Basic" in n for n in notes) or \
@@ -2143,6 +2211,7 @@ def save_cache(cfg, sheets):
 
 
 def cloud_run(cfg, backfill=False):
+    _STATE["run_start"] = datetime.now().isoformat(timespec="seconds")
     failed = None
     try:
         run_refresh(cfg, backfill=backfill)
