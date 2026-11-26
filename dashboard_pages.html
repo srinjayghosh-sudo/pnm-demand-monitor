@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P&amp;M demand monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0A0E13; --panel:#111821; --panel2:#0C1219; --raise:#17202B; --line:#222C38; --line2:#2E3A48;
+  --ink:#E7ECF1; --muted:#8C99A6; --faint:#5D6A77;
+  --teal:#34C1AC; --indigo:#8C9CFF; --amber:#E9A54E; --red:#F0898A; --violet:#B69CFF; --pink:#F08AB0;
+  --teal-bg:rgba(52,193,172,.14); --amber-bg:rgba(233,165,78,.14); --red-bg:rgba(240,137,138,.14); --indigo-bg:rgba(140,156,255,.14);
+  color-scheme:dark;
+}
+[data-theme="light"]{
+  --bg:#EEF1F5; --panel:#FFFFFF; --panel2:#F6F8FA; --raise:#FFFFFF; --line:#DDE3E9; --line2:#C9D2DB;
+  --ink:#16202A; --muted:#5B6875; --faint:#8A96A2;
+  --teal:#0F8B7C; --indigo:#3348B5; --amber:#B4690C; --red:#B42D2D; --violet:#6B47B0; --pink:#B5476B;
+  --teal-bg:#E2F4F0; --amber-bg:#FBF0E1; --red-bg:#FBE8E8; --indigo-bg:#E8EBFB;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;font-size:14.5px;line-height:1.5}
+.num,td.n,.mono{font-variant-numeric:tabular-nums}
+.mono{font-family:"IBM Plex Mono",ui-monospace,Consolas,monospace}
+.app{max-width:1320px;margin:0 auto;padding:18px 24px 60px}
+header.top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 20px;padding:4px 0 14px}
+.brand h1{font-size:20px;font-weight:600;margin:0;letter-spacing:-.01em}
+.brand p{margin:2px 0 0;color:var(--muted);font-size:12.5px}
+.tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.status{color:var(--muted);font-size:12.5px;margin-right:6px}
+.btn{font:inherit;font-size:13px;font-weight:500;padding:7px 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--ink);cursor:pointer;text-decoration:none;display:inline-flex;gap:6px;align-items:center}
+.btn:hover{border-color:var(--muted)}
+.btn.pri{background:var(--indigo);border-color:var(--indigo);color:#0A0E13;font-weight:600}
+.btn.sm{font-size:12px;padding:4px 9px}
+.btn:focus-visible,.tab:focus-visible,.chip:focus-visible,tr.click:focus-visible{outline:2px solid var(--indigo);outline-offset:2px}
+nav.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:18px;overflow-x:auto}
+.tab{font:inherit;font-size:14px;font-weight:500;padding:10px 14px;border:0;background:none;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap}
+.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--indigo)}
+.notes{display:grid;gap:6px;margin-bottom:14px}
+.note{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--amber);padding:8px 12px;border-radius:0;font-size:13px;color:var(--muted)}
+.note.err{border-left-color:var(--red)}
+.note b{color:var(--ink)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 14px}
+.bar .lbl{font-size:12px;color:var(--muted);margin-right:2px}
+.chip{font:inherit;font-size:13px;padding:5px 11px;border-radius:999px;border:1px solid var(--line2);background:transparent;color:var(--muted);cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.chip i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px}
+select{font:inherit;font-size:13px;background:var(--raise);color:var(--ink);border:1px solid var(--line2);border-radius:7px;padding:6px 10px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:14px}
+.ph{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+.ph h2{font-size:15.5px;font-weight:600;margin:0}
+.explain{font-size:13px;color:var(--muted);margin:2px 0 10px;max-width:95ch}
+.explain b{color:var(--ink);font-weight:500}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:14px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.kpi .l{font-size:12px;color:var(--muted)}
+.kpi .v{font-size:24px;font-weight:600;margin:2px 0;font-variant-numeric:tabular-nums}
+.kpi .h{font-size:12px;color:var(--faint)}
+.datawrap{background:var(--panel2);border:1px solid var(--line);border-radius:8px;overflow:auto;max-height:560px}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{padding:9px 11px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap;vertical-align:top}
+thead th{position:sticky;top:0;background:var(--panel2);color:var(--muted);font-weight:500;font-size:12.5px;cursor:pointer;user-select:none;z-index:1}
+thead th:hover{color:var(--ink)}
+td.n{text-align:right}
+td.w{white-space:normal;min-width:260px;max-width:520px}
+tr.click{cursor:pointer} tr.click:hover td{background:var(--raise)}
+tr.sel td{background:var(--indigo-bg)}
+.tag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.t-up{background:var(--teal-bg);color:var(--teal)} .t-down{background:var(--amber-bg);color:var(--amber)}
+.t-bad{background:var(--red-bg);color:var(--red)} .t-flat{border:1px solid var(--line2);color:var(--muted)} .t-info{background:var(--indigo-bg);color:var(--indigo)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin-bottom:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--line2);border-radius:0;padding:12px 14px}
+.card.up{border-left-color:var(--teal)} .card.down{border-left-color:var(--amber)} .card.bad{border-left-color:var(--red)} .card.info{border-left-color:var(--indigo)}
+.card .k{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.card .t{font-size:15.5px;font-weight:600;margin:2px 0 4px}
+.card .w{font-size:13px;color:var(--muted)}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+@media (max-width:960px){.two{grid-template-columns:1fr}}
+.chart{position:relative;height:300px}
+.chart.sm{height:240px}
+.empty{color:var(--muted);font-size:13.5px;padding:10px 2px}
+ul.ins{margin:0;padding-left:18px} ul.ins li{margin:5px 0}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;max-width:640px}
+.cal .h{font-size:11.5px;color:var(--muted);text-align:center}
+.cal .d{border-radius:5px;padding:6px 4px;font-size:12px;text-align:center;line-height:1.25;border:1px solid var(--line);cursor:pointer}
+.cal .d small{display:block;color:var(--muted);font-size:11px}
+.cal .d.ev{outline:2px solid var(--amber);outline-offset:-2px}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;overflow:hidden}
+.seg button{font:inherit;font-size:12.5px;padding:5px 10px;background:transparent;border:0;color:var(--muted);cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--raise);color:var(--ink)}
+.drawer-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:20;display:none}
+.drawer{position:fixed;top:0;right:0;height:100%;width:min(640px,100%);background:var(--panel);border-left:1px solid var(--line2);z-index:21;
+  transform:translateX(100%);transition:transform .18s ease;display:flex;flex-direction:column}
+.drawer.open{transform:none} .drawer-bg.open{display:block}
+.drawer header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line)}
+.drawer header h3{margin:0;font-size:16px}
+.drawer .body{padding:14px 18px;overflow:auto}
+.drawer .kv{display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;font-size:13.5px;margin-bottom:12px}
+.drawer .kv dt{color:var(--muted)} .drawer .kv dd{margin:0}
+.steps{margin:0;padding-left:20px} .steps li{margin:4px 0}
+dl.gl{display:grid;grid-template-columns:max-content 1fr;gap:8px 18px;font-size:13.5px;margin:0}
+dl.gl dt{font-weight:600} dl.gl dd{margin:0;color:var(--muted)}
+.hidden{display:none !important}
+@media (prefers-reduced-motion:reduce){.drawer{transition:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <h1>P&amp;M demand monitor</h1>
+      <p id="sub">Search demand for packers &amp; movers vs your Google Ads</p>
+    </div>
+    <div class="tools">
+      <span class="status" id="status">Loading…</span>
+      <button class="btn pri" id="runBtn" type="button">Run update now</button>
+      <button class="btn" type="button" data-excel>Download Excel</button>
+      <button class="btn" id="themeBtn" type="button" aria-label="Switch light or dark">Light</button>
+      <button class="btn" id="lockBtn" type="button">Sign out</button>
+    </div>
+  </header>
+  <div class="notes" id="notes"></div>
+  <nav class="tabs" role="tablist" id="tabs"></nav>
+
+  <!-- ============ BUDGET BOARD ============ -->
+  <section data-tab="budget">
+    <div class="kpis" id="bbKpis"></div>
+    <div class="panel">
+      <div class="ph"><div><h2>Budget board: what to change in each city</h2>
+        <p class="explain">One row per city. <b>Daily spend now</b> = average of the last 7 days incl. GST. <b>Suggested</b> = daily spend × (1 + change). The change follows expected demand for the next 4 weeks (capped at ±30%), plus part of the impressions currently lost to budget; it stays at 0 if CPA has jumped. Click any row for the full reasoning and next steps.</p></div>
+        <button class="btn sm" data-csv="Budget_Board">Download CSV</button></div>
+      <div class="datawrap" id="tBudget"></div>
+    </div>
+  </section>
+
+  <!-- ============ CITIES ============ -->
+  <section data-tab="cities" class="hidden">
+    <div class="panel">
+      <div class="ph"><div><h2>All cities at a glance</h2>
+        <p class="explain"><b>Demand now</b>: Google searches for “packers and movers” in the last 7 days vs that state’s 12-month average (+12% = 12% more searches than usual). <b>Next 4 weeks</b>: expected demand vs a normal week. <b>Lost to budget / rank</b>: share of searches you were eligible for but missed in the last 14 days, because the budget ran out or the bid/ad quality was too low. Click a row to open the city.</p></div>
+        <button class="btn sm" data-csv="Overview">Download CSV</button></div>
+      <div class="datawrap" id="tOverview"></div>
+    </div>
+    <div class="bar"><span class="lbl">City</span><select id="citySel" aria-label="City"></select></div>
+    <p class="explain" id="lede" style="font-size:17px;color:var(--ink);font-weight:500;margin:4px 0 12px"></p>
+    <div class="cards" id="cards"></div>
+    <div class="kpis" id="tiles"></div>
+    <div class="two">
+      <div class="panel"><h2 style="font-size:15px;margin:0 0 8px" id="insTitle">Quick insights</h2><ul class="ins" id="ins"></ul></div>
+      <div class="panel"><h2 style="font-size:15px;margin:0 0 8px">How your delivery compares with demand</h2>
+        <p class="explain">Weekly: your impressions (left axis) against Google search interest (right axis). When the green line rises and the blue does not, you are missing demand.</p>
+        <div class="chart sm"><canvas id="cCityHist"></canvas></div></div>
+    </div>
+  </section>
+
+  <!-- ============ DEMAND TRENDS ============ -->
+  <section data-tab="demand" class="hidden">
+    <div class="bar"><span class="lbl">City</span><select id="citySel2" aria-label="City"></select>
+      <span class="lbl" style="margin-left:10px">Keyword</span><span id="kwChips"></span></div>
+    <div class="panel">
+      <div class="ph"><div><h2 id="kwTitle">Search trend by keyword</h2>
+        <p class="explain"><b>What the numbers mean:</b> Google Trends does not give search counts. It gives a <b>0–100 score</b> for each state: 100 = the busiest week for these keywords in that state, 50 = half as many searches as that week. So “packers and movers: 51” means about half the searches of the peak week, and “house shifting: 3.9” means it gets roughly 13× fewer searches than packers and movers. Switch to <b>“Each vs its own average”</b> to compare the shape of small keywords.</p></div>
+        <div style="display:flex;gap:8px;align-items:center"><div class="seg" id="kwMode"><button aria-pressed="true" data-m="abs">Actual level</button><button aria-pressed="false" data-m="idx">Each vs its own average</button></div>
+        <button class="btn sm" data-csv="Trends_Weekly_KW">CSV</button></div></div>
+      <div class="chart"><canvas id="cKw"></canvas></div>
+    </div>
+    <div class="two">
+      <div class="panel"><h2 style="font-size:15px;margin:0">Day of week</h2>
+        <p class="explain">100 = an average day. Bars above 100 are busier days.</p><div class="chart sm"><canvas id="cDow"></canvas></div></div>
+      <div class="panel"><h2 style="font-size:15px;margin:0">Time of month</h2>
+        <p class="explain">Rent cycles push moves to the start and end of the month; this shows how strong that is here.</p><div class="chart sm"><canvas id="cDom"></canvas></div></div>
+    </div>
+    <div class="panel">
+      <div class="ph"><div><h2>Unusual days</h2><p class="explain">Days where demand, impressions or conversions moved far more than normal, with nearby holidays and whether your spend changed at the same time (if it did, the cause is probably you, not the market).</p></div>
+        <button class="btn sm" data-csv="Spikes_Tagged">CSV</button></div>
+      <div class="datawrap" id="tSpikes"></div>
+    </div>
+  </section>
+
+  <!-- ============ PLAN AHEAD ============ -->
+  <section data-tab="plan" class="hidden">
+    <div class="bar"><span class="lbl">City</span><select id="citySel3" aria-label="City"></select>
+      <span class="lbl" style="margin-left:10px">Keyword</span><span id="kwChips2"></span></div>
+    <div class="panel">
+      <div class="ph"><div><h2>Next 12 months: how busy each week should be</h2>
+        <p class="explain" id="fcExplain">Each bar = one week. <b>+20%</b> means about 20% more searches than a normal week; <b>−15%</b> means 15% fewer. Learned from 5 years of Google Trends. The shaded band is the range seen in past years. Click a bar for that week’s details.</p></div>
+        <button class="btn sm" data-csv="Forecast_Weekly">CSV</button></div>
+      <div class="chart"><canvas id="cFc"></canvas></div>
+    </div>
+    <div class="two">
+      <div class="panel"><div class="ph"><div><h2 style="font-size:15px;margin:0">Coming up: when to change budgets</h2>
+        <p class="explain">Stretches of weeks clearly busier or quieter than normal, what to do, and how CPC behaved in that month before.</p></div>
+        <button class="btn sm" data-csv="Upcoming_Changes">CSV</button></div><div class="datawrap" id="tUp"></div></div>
+      <div class="panel"><div class="ph"><div><h2 style="font-size:15px;margin:0">Next 90 days, day by day</h2>
+        <p class="explain">% vs a normal day. Green = busier, amber = quieter. Outlined = holiday. Click a day for details.</p></div>
+        <button class="btn sm" data-csv="Forecast_Daily">CSV</button></div><div id="cal90"></div></div>
+    </div>
+  </section>
+
+  <!-- ============ EXTERNAL ============ -->
+  <section data-tab="external" class="hidden">
+    <div class="bar"><span class="lbl">City</span><select id="citySel4" aria-label="City"></select></div>
+    <div class="cards" id="extCards"></div>
+    <div class="two">
+      <div class="panel"><div class="ph"><div><h2 style="font-size:15px;margin:0">Early signal: rental searches vs moving demand</h2>
+        <p class="explain">People search “house for rent”, “rent agreement”, “flat for rent” before they move. When the purple line rises first, moving demand (green) usually follows a few weeks later.</p></div>
+        <button class="btn sm" data-csv="Leading_Weekly">CSV</button></div><div class="chart sm"><canvas id="cLead"></canvas></div></div>
+      <div class="panel"><div class="ph"><div><h2 style="font-size:15px;margin:0">Festivals and holidays: typical effect</h2>
+        <p class="explain">How much demand changed around each festival in past years, after removing season and weekday effects. “Seen” = how many times it has been measured.</p></div>
+        <button class="btn sm" data-csv="Event_Impact">CSV</button></div><div class="datawrap" id="tEvents" style="max-height:330px"></div></div>
+    </div>
+    <div class="two">
+      <div class="panel"><div class="ph"><div><h2 style="font-size:15px;margin:0">Weather: rain and demand</h2>
+        <p class="explain">Heavy-rain days (20 mm or more) and how demand and your impressions behaved on them. Source: NASA POWER.</p></div>
+        <button class="btn sm" data-csv="Weather_Impact">CSV</button></div><div class="datawrap" id="tWx" style="max-height:330px"></div></div>
+      <div class="panel"><div class="ph"><div><h2 style="font-size:15px;margin:0">Economy: India yearly indicators</h2>
+        <p class="explain">World Bank data. Explains why one year is busier than another; too slow for weekly decisions.</p></div>
+        <button class="btn sm" data-csv="Macro_Context">CSV</button></div><div class="datawrap" id="tMacro" style="max-height:330px"></div></div>
+    </div>
+    <div class="panel"><div class="ph"><div><h2>Where the demand is, across India</h2>
+      <p class="explain">Google Trends interest by city for each keyword (100 = the city with the most searches). Cities marked “not running” have demand but no campaigns.</p></div>
+      <button class="btn sm" data-csv="Locations">CSV</button></div><div class="datawrap" id="tLoc"></div></div>
+  </section>
+
+  <!-- ============ DATA ============ -->
+  <section data-tab="data" class="hidden">
+    <div class="panel">
+      <div class="ph"><div><h2>Data &amp; downloads</h2>
+        <p class="explain">Every dataset behind this dashboard. Pick one to preview it, sort by clicking a column, and download it as CSV. The Excel file contains all of them as sheets.</p></div>
+        <button class="btn" type="button" data-excel>Download everything (Excel)</button></div>
+      <div class="bar"><span class="lbl">Dataset</span><select id="dsSel" aria-label="Dataset"></select>
+        <span class="lbl" id="dsInfo"></span><button class="btn sm" id="dsCsv">Download this CSV</button></div>
+      <div class="datawrap" id="tData"></div>
+    </div>
+    <div class="panel">
+      <h2 style="font-size:15px;margin:0 0 10px">What the terms mean</h2>
+      <dl class="gl">
+        <dt>Google Trends score</dt><dd>0–100 per state. 100 = the busiest week for these keywords in that state; 50 = half as many searches. A relative measure, not a search count.</dd>
+        <dt>Demand now</dt><dd>Last 7 days of the score vs its 12-month average.</dd>
+        <dt>Next 4 weeks</dt><dd>Expected demand vs a normal week, from 5 years of seasonality. Back-tested on the past year.</dd>
+        <dt>Impression share</dt><dd>Of the searches you were eligible for, the share where your ad showed (last 14 days).</dd>
+        <dt>Lost to budget</dt><dd>Share missed because the daily budget ran out. High → raise budget.</dd>
+        <dt>Lost to rank</dt><dd>Share missed because bid or ad quality was too low. High → raise bids/tCPA or improve ads.</dd>
+        <dt>CPA</dt><dd>Cost incl. GST per conversion, last 30 matured days (conversions need ~7 days to settle).</dd>
+        <dt>Rental searches</dt><dd>“house for rent”, “rent agreement”, “flat for rent”: usually rise before moves.</dd>
+        <dt>Confidence</dt><dd>High = outlook tested within ±10% and delivery data present; Medium = partial data; Low = little data yet.</dd>
+      </dl>
+      <ul id="notesList" style="margin-top:12px;color:var(--muted);font-size:13px"></ul>
+    </div>
+  </section>
+</div>
+
+<div id="gate" class="hidden" style="position:fixed;inset:0;background:var(--bg);z-index:30;display:grid;place-items:center;padding:20px">
+  <form id="gateForm" class="panel" style="width:min(380px,100%)">
+    <h2 style="font-size:17px;margin:0 0 6px">P&amp;M demand monitor</h2>
+    <p class="explain">Enter the team access key.</p>
+    <input id="gateKey" type="password" autocomplete="current-password" aria-label="Access key"
+      style="width:100%;font:inherit;padding:9px 11px;border-radius:7px;border:1px solid var(--line2);background:var(--panel2);color:var(--ink);margin-bottom:10px">
+    <div id="gateErr" style="color:var(--red);font-size:13px;min-height:18px"></div>
+    <button class="btn pri" type="submit" style="width:100%;justify-content:center">Open dashboard</button>
+  </form>
+</div>
+<div class="drawer-bg" id="dBg"></div>
+<aside class="drawer" id="drawer" aria-hidden="true" role="dialog" aria-labelledby="dTitle">
+  <header><h3 id="dTitle">Details</h3><button class="btn sm" id="dClose" type="button">Close</button></header>
+  <div class="body" id="dBody"></div>
+</aside>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmt=(v,d=0)=>v==null||isNaN(v)?"–":Number(v).toLocaleString("en-IN",{maximumFractionDigits:d,minimumFractionDigits:d});
+const pct=v=>v==null||isNaN(v)?"–":(v>0?"+":"")+fmt(v,0)+"%";
+const share=v=>v==null||isNaN(v)?"–":fmt(v*100,0)+"%";
+const inr=v=>v==null||isNaN(v)?"–":"₹"+fmt(v,0);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const day=s=>s?String(s).slice(0,10):"–";
+const ALL="All keywords";
+let D=null, CITY=null, KW=ALL, KWMODE="abs", charts={}, TAB="budget", SORT={};
+
+const TABS=[["budget","Budget board"],["cities","Cities"],["demand","Demand trends"],["plan","Plan ahead"],["external","External factors"],["data","Data & downloads"]];
+$("tabs").innerHTML=TABS.map(([k,l])=>`<button class="tab" role="tab" data-t="${k}" aria-selected="${k===TAB}">${l}</button>`).join("");
+document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>showTab(b.dataset.t));
+function showTab(t){TAB=t;document.querySelectorAll(".tab").forEach(b=>b.setAttribute("aria-selected",b.dataset.t===t));
+  document.querySelectorAll("section[data-tab]").forEach(s=>s.classList.toggle("hidden",s.dataset.tab!==t)); renderTab();}
+
+// theme
+try{const t=localStorage.getItem("pnm-theme"); if(t) document.documentElement.dataset.theme=t;}catch(e){}
+const setThemeLabel=()=>$("themeBtn").textContent=document.documentElement.dataset.theme==="dark"?"Light":"Dark";
+setThemeLabel();
+$("themeBtn").onclick=()=>{const n=document.documentElement.dataset.theme==="dark"?"light":"dark";document.documentElement.dataset.theme=n;
+  try{localStorage.setItem("pnm-theme",n)}catch(e){} setThemeLabel(); if(D) renderTab();};
+
+const kwList=()=>(D.meta&&D.meta.keywords)||[];
+const kwColor=k=>{const i=kwList().indexOf(k);return i<0?css("--ink"):css(["--teal","--violet","--amber","--pink"][i%4]);};
+const rowsC=n=>(D[n]||[]).filter(r=>r.city===CITY);
+const rowsCK=n=>(D[n]||[]).filter(r=>r.city===CITY&&(r.kw===undefined||r.kw===KW));
+const tag=(v,t=10,inv=false)=>{if(v==null||isNaN(v))return `<span class="tag t-flat">–</span>`;const up=inv?v<=-t:v>=t,dn=inv?v>=t:v<=-t;return `<span class="tag ${up?"t-up":dn?"t-down":"t-flat"}">${pct(v)}</span>`;};
+const lostTag=(v,w)=>v==null||isNaN(v)?"–":`<span class="tag ${v>=w?"t-bad":"t-flat"}">${share(v)}</span>`;
+
+// ---------- generic sortable table ----------
+function table(el,cols,rows,opts={}){
+  const key=el; const st=SORT[key]||{};
+  let R=[...rows];
+  if(st.c!=null){const c=cols[st.c];R.sort((a,b)=>{const x=c.sort?c.sort(a):a[c.k],y=c.sort?c.sort(b):b[c.k];
+    if(x==null)return 1;if(y==null)return -1;return (x>y?1:x<y?-1:0)*(st.d||1);});}
+  if(!R.length){$(el).innerHTML=`<div class="empty">${opts.empty||"No data yet."}</div>`;return;}
+  $(el).innerHTML=`<table><thead><tr>${cols.map((c,i)=>`<th data-i="${i}" title="Sort">${c.h}${st.c===i?(st.d>0?" ↑":" ↓"):""}</th>`).join("")}</tr></thead><tbody>${
+    R.map((r,ri)=>`<tr data-ri="${ri}" ${opts.click?`class="click${opts.sel&&opts.sel(r)?" sel":""}" tabindex="0"`:""}>${cols.map(c=>`<td class="${c.n?"n":""} ${c.w?"w":""}">${c.f?c.f(r):esc(r[c.k])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  $(el).querySelectorAll("th").forEach(th=>th.onclick=()=>{const i=+th.dataset.i;const s=SORT[key]||{};SORT[key]={c:i,d:s.c===i?-(s.d||1):-1};table(el,cols,rows,opts);});
+  if(opts.click) $(el).querySelectorAll("tr.click").forEach(tr=>{const go=()=>opts.click(R[+tr.dataset.ri]);tr.onclick=go;tr.onkeydown=e=>{if(e.key==="Enter")go();};});
+}
+
+// ---------- CSV ----------
+function toCSV(rows){ if(!rows||!rows.length) return ""; const cols=[...new Set(rows.flatMap(r=>Object.keys(r)))];
+  const q=v=>{if(v==null)return "";const s=String(v);return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;};
+  return [cols.join(","),...rows.map(r=>cols.map(c=>q(r[c])).join(","))].join("\n"); }
+function download(name,rows){ const blob=new Blob(["\ufeff"+toCSV(rows)],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`${name}_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500); }
+document.addEventListener("click",e=>{const b=e.target.closest("[data-csv]"); if(b&&D) download(b.dataset.csv,D[b.dataset.csv]||[]);});
+
+// ---------- drawer ----------
+function openDrawer(title,html,after){ $("dTitle").textContent=title; $("dBody").innerHTML=html; $("drawer").classList.add("open");
+  $("dBg").classList.add("open"); $("drawer").setAttribute("aria-hidden","false"); $("dClose").focus(); if(after) after(); }
+function closeDrawer(){ $("drawer").classList.remove("open"); $("dBg").classList.remove("open"); $("drawer").setAttribute("aria-hidden","true"); charts.dChart?.destroy(); delete charts.dChart; }
+$("dClose").onclick=closeDrawer; $("dBg").onclick=closeDrawer; document.addEventListener("keydown",e=>{if(e.key==="Escape")closeDrawer();});
+const kv=pairs=>`<dl class="kv">${pairs.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>`;
+
+// ---------- charts ----------
+function chart(id,type,labels,datasets,axes,legend=false,extra={}){
+  const el=$(id); if(!el) return;
+  if(typeof Chart==="undefined"){el.parentElement.innerHTML=`<div class="empty">Charts need an internet connection. Tables and downloads still work.</div>`;return;}
+  Chart.defaults.font.family=getComputedStyle(document.body).fontFamily; Chart.defaults.font.size=12;
+  charts[id]?.destroy(); const tick=css("--muted"),grid=css("--line");
+  const scales={x:{ticks:{color:tick,maxRotation:0,autoSkipPadding:16},grid:{display:false}},
+    y:{position:"left",title:{display:!!axes.y,text:axes.y,color:tick},ticks:{color:tick},grid:{color:grid}}};
+  if(axes.y2) scales.y2={position:"right",title:{display:true,text:axes.y2,color:tick},ticks:{color:tick},grid:{display:false}};
+  charts[id]=new Chart(el,{type,data:{labels,datasets},options:{responsive:true,maintainAspectRatio:false,animation:false,
+    interaction:{mode:"index",intersect:false},onClick:extra.onClick,
+    plugins:{legend:{display:legend,labels:{color:tick,boxWidth:11}},tooltip:{callbacks:extra.tooltip||{label:c=>`${c.dataset.label}: ${fmt(c.parsed.y,Math.abs(c.parsed.y)<10?1:0)}`}}},scales}});
+}
+function pending(id,msg){charts[id]?.destroy();delete charts[id];const c=$(id);c.classList.add("hidden");let m=c.parentElement.querySelector(".empty");
+  if(!m){m=document.createElement("div");m.className="empty";c.parentElement.appendChild(m);} m.textContent=msg;}
+function ready(id){const c=$(id);c.classList.remove("hidden");c.parentElement.querySelector(".empty")?.remove();}
+
+// ---------- load ----------
+let KEY=""; try{KEY=localStorage.getItem("pnm-key")||"";}catch(e){}
+const b64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+async function unseal(box){ // AES-256-GCM, key from PBKDF2-SHA256 (same as build_site.py)
+  const base=await crypto.subtle.importKey("raw",new TextEncoder().encode(KEY),"PBKDF2",false,["deriveKey"]);
+  const k=await crypto.subtle.deriveKey({name:"PBKDF2",salt:b64(box.salt),iterations:box.iter,hash:"SHA-256"},base,{name:"AES-GCM",length:256},false,["decrypt"]);
+  return new Uint8Array(await crypto.subtle.decrypt({name:"AES-GCM",iv:b64(box.iv)},k,b64(box.ct)));}
+async function gunzipJSON(bytes){const ds=new DecompressionStream("gzip");const out=await new Response(new Blob([bytes]).stream().pipeThrough(ds)).text();return JSON.parse(out);}
+const getBox=async n=>{const r=await fetch(n+"?t="+Date.now(),{cache:"no-store"});if(!r.ok)throw new Error(r.status===404?"not published yet":"HTTP "+r.status);return r.json();};
+function askKey(msg){$("gate").classList.remove("hidden");$("gateErr").textContent=msg||"";$("gateKey").value="";$("gateKey").focus();}
+$("gateForm").onsubmit=e=>{e.preventDefault();KEY=$("gateKey").value.trim();$("gate").classList.add("hidden");load(true);};
+$("lockBtn").onclick=()=>{KEY="";try{localStorage.removeItem("pnm-key")}catch(e){}askKey();};
+document.addEventListener("click",async e=>{const b=e.target.closest("[data-excel]");if(!b)return;b.disabled=true;const t=b.textContent;b.textContent="Preparing…";
+  try{const box=await getBox("excel.enc.json");const bytes=await unseal(box);
+    const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([bytes],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}));
+    a.download=box.name||"pnm_demand.xlsx";document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500);}
+  catch(err){alert("Excel not available: "+(err.message||"could not unlock"));}finally{b.disabled=false;b.textContent=t;}});
+async function load(fromGate){
+  if(!KEY){askKey();$("status").textContent="Locked";return;}
+  $("status").textContent="Loading…";
+  let box;
+  try{box=await getBox("data.enc.json");}catch(e){$("status").textContent="Data not published yet: run the workflow on GitHub.";return;}
+  try{D=await gunzipJSON(await unseal(box));if(fromGate){try{localStorage.setItem("pnm-key",KEY)}catch(e){}}}
+  catch(e){askKey("That key didn’t unlock the data. Check it and try again.");$("status").textContent="Locked";return;}
+  try{
+  }catch(e){$("status").textContent="Couldn’t reach the server. Check your connection and reload.";return;}
+  const st=D.status||{}, m=D.meta||{};
+  if(m.account) $("sub").textContent=`Account ${m.account} · campaigns with “${m.filter}” · cost incl. GST ×${m.gst} · Trends keywords: ${(m.keywords||[]).join(", ")}`;
+  $("status").textContent=st.last_refresh?`Updated ${st.last_refresh.run_at.replace("T"," ").slice(0,16)} · data to ${(st.last_refresh.detail||"").replace("data up to ","")} · next ~${st.refresh_time||"05:00 IST"}`:"Not updated yet";
+  $("notes").innerHTML=(st.error?`<div class="note err"><b>Last update had a problem.</b> ${esc(st.error)}</div>`:"")+((m.notices)||[]).map(n=>`<div class="note"><b>Note:</b> ${esc(n)}</div>`).join("");
+  if(D.empty){$("tBudget").innerHTML=`<div class="empty">No data yet. Click “Run update now” and run the workflow on GitHub.</div>`;return;}
+  const cities=(D.Overview||[]).map(r=>r.city); if(!CITY||!cities.includes(CITY)) CITY=cities[0];
+  ["citySel","citySel2","citySel3","citySel4"].forEach(id=>{$(id).innerHTML=cities.map(c=>`<option ${c===CITY?"selected":""}>${esc(c)}</option>`).join("");
+    $(id).onchange=e=>{CITY=e.target.value;syncCity();renderTab();};});
+  const chips=id=>{$(id).innerHTML=[ALL,...kwList()].map(k=>`<button class="chip" aria-pressed="${k===KW}" data-k="${esc(k)}">${k===ALL?"":`<i style="background:${kwColor(k)}"></i>`}${esc(k)}</button>`).join("");
+    $(id).querySelectorAll(".chip").forEach(b=>b.onclick=()=>{KW=b.dataset.k;renderTab();});};
+  chips("kwChips"); chips("kwChips2");
+  const ds=Object.keys(D).filter(k=>Array.isArray(D[k])&&k!=="notices");
+  $("dsSel").innerHTML=ds.map(k=>`<option>${k}</option>`).join(""); $("dsSel").onchange=renderData; $("dsCsv").onclick=()=>download($("dsSel").value,D[$("dsSel").value]);
+  $("notesList").innerHTML=(D.Notes||[]).map(n=>`<li>${esc(n.Notes)}</li>`).join("");
+  renderTab();
+}
+function syncCity(){["citySel","citySel2","citySel3","citySel4"].forEach(id=>$(id).value=CITY);}
+function renderTab(){ if(!D||D.empty) return;
+  document.querySelectorAll(".chip[data-k]").forEach(b=>b.setAttribute("aria-pressed",b.dataset.k===KW));
+  ({budget:renderBudget,cities:renderCities,demand:renderDemand,plan:renderPlan,external:renderExternal,data:renderData})[TAB](); }
+
+// ---------- budget board ----------
+function renderBudget(){
+  const B=D.Budget_Board||[]; const all=B.find(r=>r.city==="All India"); const C=B.filter(r=>r.city!=="All India");
+  const sumNow=C.reduce((a,r)=>a+(r.avg_daily_spend_7d||0),0), sumNew=C.reduce((a,r)=>a+(r.suggested_daily_budget||0),0);
+  const k=(l,v,h)=>`<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="h">${h}</div></div>`;
+  $("bbKpis").innerHTML=[k("Daily spend now (all cities)",inr(sumNow),"7-day average, incl. GST"),
+    k("Suggested daily total",inr(sumNew),`${pct(sumNow?(sumNew/sumNow-1)*100:null)} vs now`),
+    k("Raise budget",C.filter(r=>r.budget_change_pct>0).length+" cities",C.filter(r=>r.budget_change_pct>0).map(r=>r.city).slice(0,4).join(", ")||"–"),
+    k("Trim budget",C.filter(r=>r.budget_change_pct<0).length+" cities",C.filter(r=>r.budget_change_pct<0).map(r=>r.city).slice(0,4).join(", ")||"–"),
+    k("Raise bids / tCPA",C.filter(r=>/Raise/.test(r.bid_action)).length+" cities",C.filter(r=>/Raise/.test(r.bid_action)).map(r=>r.city).slice(0,4).join(", ")||"–"),
+    k("All India demand",pct(all&&all.demand_now_pct),`next 4 weeks ${pct(all&&all.demand_next4w_pct)}`)].join("");
+  const chTag=v=>`<span class="tag ${v>0?"t-up":v<0?"t-down":"t-flat"}">${v>0?"+":""}${fmt(v)}%</span>`;
+  table("tBudget",[
+    {h:"City",k:"city",f:r=>`<b>${esc(r.city)}</b>`},
+    {h:"Daily spend now",k:"avg_daily_spend_7d",n:1,f:r=>inr(r.avg_daily_spend_7d)},
+    {h:"Change",k:"budget_change_pct",n:1,f:r=>chTag(r.budget_change_pct)},
+    {h:"Suggested daily",k:"suggested_daily_budget",n:1,f:r=>`<b>${inr(r.suggested_daily_budget)}</b>`},
+    {h:"Bids",k:"bid_action",f:r=>`<span class="tag ${/Raise/.test(r.bid_action)?"t-up":"t-flat"}">${esc(r.bid_action)}</span>`},
+    {h:"Demand now",k:"demand_now_pct",n:1,f:r=>tag(r.demand_now_pct)},
+    {h:"Next 4 wks",k:"demand_next4w_pct",n:1,f:r=>tag(r.demand_next4w_pct)},
+    {h:"Impr. share",k:"impr_share_14d",n:1,f:r=>share(r.impr_share_14d)},
+    {h:"Lost: budget",k:"lost_to_budget_14d",n:1,f:r=>lostTag(r.lost_to_budget_14d,.15)},
+    {h:"Lost: rank",k:"lost_to_rank_14d",n:1,f:r=>lostTag(r.lost_to_rank_14d,.5)},
+    {h:"CPA 30d",k:"cpa_30d_incl_gst",n:1,f:r=>`${inr(r.cpa_30d_incl_gst)} ${r.cpa_change_pct==null?"":tag(r.cpa_change_pct,15,true)}`},
+    {h:"Confidence",k:"confidence",f:r=>`<span class="tag ${r.confidence==="High"?"t-up":r.confidence==="Low"?"t-bad":"t-info"}">${r.confidence}</span>`},
+  ],B,{click:r=>budgetDrawer(r)});
+}
+function budgetDrawer(r){
+  const steps=(r.way_forward||"").split(/\s*\d\)\s*/).filter(Boolean);
+  const daily=(D.Daily_Aligned||[]).filter(x=>x.city===r.city).slice(-60);
+  openDrawer(`${r.city}: budget plan`,
+    kv([["Daily spend now",inr(r.avg_daily_spend_7d)+" (7-day avg, incl. GST)"],["Suggested daily budget",`<b>${inr(r.suggested_daily_budget)}</b> (${r.budget_change_pct>0?"+":""}${fmt(r.budget_change_pct)}%)`],
+      ["Bids",esc(r.bid_action)],["Demand now / next 4 weeks",`${pct(r.demand_now_pct)} / ${pct(r.demand_next4w_pct)}`],
+      ["Impression share",share(r.impr_share_14d)+` · lost to budget ${share(r.lost_to_budget_14d)} · lost to rank ${share(r.lost_to_rank_14d)}`],
+      ["CPA (30 days)",`${inr(r.cpa_30d_incl_gst)} (${pct(r.cpa_change_pct)} vs previous 30) · ${fmt(r.conversions_30d)} conversions`],
+      ["Confidence",`${r.confidence}${r.forecast_error_pct!=null?` · outlook tested within ±${fmt(r.forecast_error_pct)}%`:""}`]])
+    +`<h3 style="font-size:14px;margin:14px 0 6px">Why</h3><p style="margin:0;color:var(--muted)">${esc(r.why)}</p>
+      <h3 style="font-size:14px;margin:14px 0 6px">Way forward</h3><ol class="steps">${steps.map(s=>`<li>${esc(s)}</li>`).join("")}</ol>
+      <h3 style="font-size:14px;margin:16px 0 6px">Last 60 days: spend vs demand</h3><div class="chart sm"><canvas id="dChart"></canvas></div>
+      <div style="margin-top:10px"><button class="btn sm" id="dCsv">Download this city’s daily data</button></div>`,
+    ()=>{ chart("dChart","bar",daily.map(x=>day(x.date)),[
+        {type:"bar",label:"Cost incl. GST (₹)",data:daily.map(x=>x.cost),backgroundColor:css("--indigo"),yAxisID:"y",order:2},
+        {type:"line",label:"Search interest (0–100)",data:daily.map(x=>x.trends_index),borderColor:css("--teal"),backgroundColor:css("--teal"),pointRadius:0,borderWidth:2,yAxisID:"y2",order:1,spanGaps:true}],
+        {y:"₹ per day",y2:"Search interest"},true);
+      $("dCsv").onclick=()=>download(`daily_${r.city}`,(D.Daily_Aligned||[]).filter(x=>x.city===r.city)); });
+}
+
+// ---------- cities ----------
+const kindCls=k=>({"Raise budget":"up","Raise bids":"up","Prepare":"up","Early signal":"info","Festival ahead":"info","Trim budget":"down","Budget-capped":"bad","Weak ad rank":"bad","Check efficiency":"bad","Missed demand":"bad"})[k]||"";
+function renderCities(){
+  table("tOverview",[
+    {h:"City",k:"city",f:r=>`<b>${esc(r.city)}</b>`},{h:"Demand now",k:"demand_now_pct",n:1,f:r=>tag(r.demand_now_pct)},
+    {h:"Next 4 weeks",k:"demand_next4w_pct",n:1,f:r=>tag(r.demand_next4w_pct)},{h:"Impr. share",k:"impr_share_14d",n:1,f:r=>share(r.impr_share_14d)},
+    {h:"Lost: budget",k:"lost_to_budget_14d",n:1,f:r=>lostTag(r.lost_to_budget_14d,.15)},{h:"Lost: rank",k:"lost_to_rank_14d",n:1,f:r=>lostTag(r.lost_to_rank_14d,.5)},
+    {h:"CPA 30d",k:"cpa_30d_incl_gst",n:1,f:r=>`${inr(r.cpa_30d_incl_gst)} ${r.cpa_change_pct==null?"":tag(r.cpa_change_pct,15,true)}`},
+    {h:"What to do",k:"top_action",f:r=>`<span class="tag ${({up:"t-up",down:"t-down",bad:"t-bad",info:"t-info"})[kindCls(r.action_kind)]||"t-flat"}">${esc(r.top_action)}</span>`},
+  ],D.Overview||[],{click:r=>{CITY=r.city;syncCity();renderCities();},sel:r=>r.city===CITY});
+  const o=(D.Overview||[]).find(r=>r.city===CITY)||{}; const d7=o.demand_now_pct,n4=o.demand_next4w_pct;
+  $("lede").textContent=`${CITY}: ${d7==null?"demand data still loading":d7>=10?`demand is high now (${pct(d7)})`:d7<=-10?`demand is low now (${pct(d7)})`:"demand is normal now"}${n4==null?"":n4>=10?`, rising over the next 4 weeks (${pct(n4)})`:n4<=-10?`, falling over the next 4 weeks (${pct(n4)})`:", steady for the next 4 weeks"}.`;
+  const A=rowsC("Actions");
+  $("cards").innerHTML=A.map(a=>`<div class="card ${kindCls(a.kind)}"><div class="k">${esc(a.kind)}</div><div class="t">${esc(a.action)}</div><div class="w">${esc(a.why)}</div></div>`).join("");
+  const t=(l,v,h)=>`<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="h">${h}</div></div>`;
+  $("tiles").innerHTML=[t("Demand now",pct(d7),"last 7 days vs normal"),t("Next 4 weeks",pct(n4),"expected vs a normal week"),
+    t("Impression share",share(o.impr_share_14d),"last 14 days"),t("Lost to budget",share(o.lost_to_budget_14d),`your normal ${share(o.lost_to_budget_normal)}`),
+    t("Lost to rank",share(o.lost_to_rank_14d),`your normal ${share(o.lost_to_rank_normal)}`),t("CPA (30d)",inr(o.cpa_30d_incl_gst),`${pct(o.cpa_change_pct)} vs previous 30 days`)].join("");
+  const dk=(D.meta&&D.meta.decision_keyword)||"packers and movers"; $("insTitle").textContent=`Quick insights (based on “${dk}”)`;
+  $("ins").innerHTML=rowsC("Insights").map(i=>`<li>${esc(i.insight)}</li>`).join("")||`<li class="empty">Builds up as data loads.</li>`;
+  const wk=rowsC("Weekly");
+  if(!wk.length) pending("cCityHist","No weekly data yet."); else { ready("cCityHist");
+    chart("cCityHist","line",wk.map(w=>day(w.week_start)),[
+      {label:"Your impressions",data:wk.map(w=>w.impressions),borderColor:css("--indigo"),backgroundColor:css("--indigo"),pointRadius:0,borderWidth:2,yAxisID:"y",tension:.25},
+      {label:"Search interest (0–100)",data:wk.map(w=>w.trends_index),borderColor:css("--teal"),backgroundColor:css("--teal"),pointRadius:0,borderWidth:2,yAxisID:"y2",tension:.25,spanGaps:true}],
+      {y:"Impressions / week",y2:"Search interest"},true); }
+}
+
+// ---------- demand ----------
+function renderDemand(){
+  $("kwTitle").textContent=KW===ALL?`Search trend by keyword: ${CITY}`:`Search trend: “${KW}”, ${CITY}`;
+  document.querySelectorAll("#kwMode button").forEach(b=>{b.setAttribute("aria-pressed",b.dataset.m===KWMODE);b.onclick=()=>{KWMODE=b.dataset.m;renderDemand();};});
+  const T=(D.Trends_Weekly_KW||[]).filter(r=>r.city===CITY);
+  if(!T.length) pending("cKw","Appears once this state’s daily Trends history has loaded (a few states per daily run)."); else { ready("cKw");
+    const weeks=[...new Set(T.map(r=>day(r.week_start)))].sort(); const show=KW===ALL?kwList():[KW];
+    const series=show.map(k=>{const v=weeks.map(w=>(T.find(r=>r.kw===k&&day(r.week_start)===w)||{}).idx??null);
+      if(KWMODE==="idx"){const vals=v.filter(x=>x!=null);const avg=vals.reduce((a,b)=>a+b,0)/(vals.length||1);return v.map(x=>x==null||!avg?null:x/avg*100);}return v;});
+    chart("cKw","line",weeks,show.map((k,i)=>({label:k,data:series[i],borderColor:kwColor(k),backgroundColor:kwColor(k),borderWidth:2,pointRadius:0,tension:.25,spanGaps:true})),
+      {y:KWMODE==="idx"?"100 = this keyword’s own average":"Google Trends score (0–100)"},true,
+      {tooltip:{label:c=>KWMODE==="idx"?`${c.dataset.label}: ${fmt(c.parsed.y)} (${pct(c.parsed.y-100)} vs its average)`:`${c.dataset.label}: ${fmt(c.parsed.y,1)} / 100 → ${fmt(c.parsed.y,0)}% of the peak week’s searches`}}); }
+  const prof=(id,list,key,order,lab)=>{const by=Object.fromEntries((D[list]||[]).filter(x=>x.city===CITY).map(x=>[x[key],x]));const o=order.filter(k=>by[k]);
+    if(!o.length){pending(id,"No data yet.");return;} ready(id);
+    chart(id,"bar",o.map(lab),[{label:"Search demand",data:o.map(k=>by[k].trends_index_rel),backgroundColor:css("--teal")},{label:"Your impressions",data:o.map(k=>by[k].impr_index),backgroundColor:css("--indigo")}],{y:"Index (100 = average)"},true);};
+  prof("cDow","DOW_Profile","dow",["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"],x=>x.slice(0,3));
+  prof("cDom","DayOfMonth_Profile","dom_bucket",["Start (1-3)","Early-mid (4-15)","Late-mid (16-end-3)","End (last 3)"],k=>({"Start (1-3)":"1st–3rd","Early-mid (4-15)":"4th–15th","Late-mid (16-end-3)":"16th–end-3","End (last 3)":"Last 3 days"})[k]);
+  const nm={impressions:"Your impressions",trends_index:"Search demand",conv_matured:"Conversions"};
+  table("tSpikes",[{h:"Date",k:"date",f:r=>day(r.date)},{h:"What",k:"series",f:r=>nm[r.series]||r.series},{h:"Move",k:"direction",f:r=>`<span class="tag ${r.direction==="Spike"?"t-up":"t-down"}">${r.direction}</span>`},
+    {h:"How unusual",k:"robust_z",n:1,f:r=>fmt(Math.abs(r.robust_z),1)+"×"},{h:"Nearby holidays",k:"events_within_window",w:1,f:r=>esc((r.events_within_window||"–").replaceAll("[Holiday] ",""))},
+    {h:"Your spend changed",k:"spend_7d_change_pct",n:1,f:r=>r.possible_internal_change?`<span class="tag t-bad">${pct(r.spend_7d_change_pct)}</span>`:"No"}],
+    rowsC("Spikes_Tagged").sort((a,b)=>String(b.date).localeCompare(a.date)),{empty:"No unusual days found."});
+}
+
+// ---------- plan ----------
+function renderPlan(){
+  const fw=rowsCK("Forecast_Weekly"); const acc=(D.Forecast_Accuracy||[]).find(a=>a.city===CITY&&(a.kw===undefined||a.kw===KW));
+  $("fcExplain").innerHTML=`Each bar = one week. <b>+20%</b> means about 20% more searches than a normal week; <b>−15%</b> means 15% fewer. ${acc?`Built from ${Math.round(acc.history_weeks/52)} years of Google Trends (${acc.trends_geo}) for ${KW===ALL?"all keywords combined":"“"+esc(KW)+"”"}${acc.backtest_typical_error_pct!=null?`; when tested on the past year it was typically within <b>±${fmt(acc.backtest_typical_error_pct)}%</b>`:""}.`:""} Click a bar for that week.`;
+  if(!fw.length){pending("cFc","Appears once this state’s 5-year Trends history has loaded (a few states per daily run).");}
+  else{ ready("cFc"); const t=12;
+    chart("cFc","bar",fw.map(r=>day(r.week_start)),[
+      {type:"bar",label:"Demand vs normal week (%)",data:fw.map(r=>r.vs_normal_pct),order:2,backgroundColor:fw.map(r=>r.vs_normal_pct>=t?css("--teal"):r.vs_normal_pct<=-t?css("--amber"):css("--line2"))},
+      {type:"line",label:"Past-year high",data:fw.map(r=>r.high_pct),borderWidth:0,pointRadius:0,fill:"+1",backgroundColor:"rgba(140,156,255,.15)",order:1},
+      {type:"line",label:"Past-year low",data:fw.map(r=>r.low_pct),borderWidth:0,pointRadius:0,order:1}],{y:"% vs a normal week"},false,
+      {onClick:(e,els)=>{if(!els.length)return;const r=fw[els[0].index];openDrawer(`Week of ${day(r.week_start)}`,kv([["Expected demand",pct(r.vs_normal_pct)+" vs a normal week"],["Range in past years",`${pct(r.low_pct)} to ${pct(r.high_pct)}`],["Years of history",r.years_of_history],["Past CPC this month",pct(r.past_cpc_this_month_pct)],["Holidays this week",esc((r.events||"–").replaceAll("[Holiday] ",""))],["Suggestion",esc(r.suggestion)]]));},
+       tooltip:{label:c=>c.datasetIndex===0?`${pct(c.parsed.y)} vs a normal week`:`${c.dataset.label}: ${pct(c.parsed.y)}`}}); }
+  table("tUp",[{h:"From",k:"from",f:r=>day(r.from)},{h:"To",k:"to",f:r=>day(r.to)},{h:"Demand",k:"demand_vs_normal_pct",n:1,f:r=>`<span class="tag ${r.type==="High"?"t-up":"t-down"}">${pct(r.demand_vs_normal_pct)}</span>`},
+    {h:"What to do",k:"suggestion",w:1,f:r=>esc(r.suggestion)},{h:"Past CPC",k:"past_cpc_this_month_pct",n:1,f:r=>pct(r.past_cpc_this_month_pct)}],rowsCK("Upcoming_Changes"),
+    {empty:fw.length?"No weeks clearly above or below normal in the next 12 months.":"Waiting for the 12-month outlook."});
+  const fd=rowsCK("Forecast_Daily"); if(!fd.length){$("cal90").innerHTML=`<div class="empty">Waiting for the 12-month outlook.</div>`;return;}
+  const pad=(new Date(day(fd[0].date)).getDay()+6)%7, max=Math.max(10,...fd.map(d=>Math.abs(d.day_vs_normal_pct)));
+  let h=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(x=>`<div class="h">${x}</div>`).join("")+"<div></div>".repeat(pad);
+  fd.forEach((d,i)=>{const v=d.day_vs_normal_pct,a=Math.round(Math.min(1,Math.abs(v)/max)*70);
+    h+=`<div class="d ${d.event?"ev":""}" data-i="${i}" style="background:color-mix(in srgb, ${v>=0?css("--teal"):css("--amber")} ${a}%, transparent)" title="${day(d.date)}: ${pct(v)}">${day(d.date).slice(8,10)}/${day(d.date).slice(5,7)}<small>${pct(v)}</small></div>`;});
+  $("cal90").innerHTML=`<div class="cal">${h}</div>`;
+  $("cal90").querySelectorAll(".d").forEach(el=>el.onclick=()=>{const d=fd[+el.dataset.i];openDrawer(day(d.date),kv([["Day",d.dow],["Expected demand",pct(d.day_vs_normal_pct)+" vs a normal day"],["Holiday / event",esc(d.event||"–")]]));});
+}
+
+// ---------- external ----------
+function renderExternal(){
+  const sig=(D.Leading_Signal||[]).find(r=>r.city===CITY), wx=(D.Weather_Impact||[]).find(r=>r.city===CITY);
+  const today=new Date().toISOString().slice(0,10);
+  const ev=(D.Event_Impact||[]).filter(r=>r.city===CITY&&r.next_date&&day(r.next_date)>=today).sort((a,b)=>String(a.next_date).localeCompare(b.next_date));
+  const card=(c,k,t,w)=>`<div class="card ${c}"><div class="k">${k}</div><div class="t">${t}</div><div class="w">${w}</div></div>`;
+  const x=sig&&sig.expected_demand_change_pct;
+  $("extCards").innerHTML=
+    (sig?card(sig.r>=.3?(x>=8?"up":x<=-8?"down":""):"","Social trend",sig.r>=.3?(Math.abs(x)<5?`Steady: no big move expected in ~${sig.lag_weeks} weeks`:`Demand ${x>0?"up":"down"} ~${fmt(Math.abs(x))}% expected in ~${sig.lag_weeks} weeks`):"Rental searches don’t predict demand well here",
+      `Rental searches lead demand by ~${sig.lag_weeks} weeks (${sig.strength} link, correlation ${fmt(sig.r,2)}); last 4 weeks ${pct(sig.indicator_4w_change_pct)}.`)
+      :card("","Social trend","Signal not ready yet","Needs 5 years of rental-search history for this state; loads over the next runs."))
+    +(wx?card(wx.demand_effect_pct!=null&&wx.demand_effect_pct<=-5?"down":"","Weather",wx.demand_effect_pct==null?"Rain effect not measurable yet":`Heavy-rain days: demand ${pct(wx.demand_effect_pct)}`,`${wx.heavy_rain_days} heavy-rain days so far; ${fmt(wx.rain_last_7d_mm)} mm in the last 7 days.`)
+      :card("","Weather","No rainfall for this view","Rainfall is tracked per city, not for All India."))
+    +card("info","Festivals coming up",ev.length?`${ev.length} in the next 12 months`:"None found",ev.slice(0,3).map(e=>`${esc(e.event)} ${day(e.next_date).slice(8,10)}/${day(e.next_date).slice(5,7)} (${pct(e.typical_effect_pct)})`).join(" · ")||"Add your own dates in events.csv.");
+  const L=rowsC("Leading_Weekly");
+  if(!L.length) pending("cLead","Appears once this state’s 5-year Trends history has loaded."); else { ready("cLead");
+    chart("cLead","line",L.map(r=>day(r.week_start)),[{label:"Rental searches",data:L.map(r=>r.rental_searches),borderColor:css("--violet"),backgroundColor:css("--violet"),borderWidth:2,pointRadius:0,tension:.25,yAxisID:"y"},
+      {label:"Packers & movers demand",data:L.map(r=>r.demand),borderColor:css("--teal"),backgroundColor:css("--teal"),borderWidth:2,pointRadius:0,tension:.25,yAxisID:"y2"}],{y:"Rental searches (score)",y2:"Moving demand (score)"},true); }
+  table("tEvents",[{h:"Next date",k:"next_date",f:r=>day(r.next_date)},{h:"Event",k:"event",w:1},{h:"Typical effect",k:"typical_effect_pct",n:1,f:r=>tag(r.typical_effect_pct)},{h:"Seen",k:"times_seen",n:1}],ev,{empty:"Appears once this state’s daily Trends history has loaded."});
+  table("tWx",[{h:"City",k:"city"},{h:"Heavy-rain days",k:"heavy_rain_days",n:1},{h:"Demand on those days",k:"demand_effect_pct",n:1,f:r=>tag(r.demand_effect_pct,5)},{h:"Your impressions",k:"impressions_effect_pct",n:1,f:r=>tag(r.impressions_effect_pct,5)},{h:"Rain, last 7 days",k:"rain_last_7d_mm",n:1,f:r=>fmt(r.rain_last_7d_mm)+" mm"}],D.Weather_Impact||[],{empty:"Rainfall loads on the next update."});
+  const M=D.Macro_Context||[]; const mc=M.length?Object.keys(M[0]).filter(k=>k!=="year"):[];
+  table("tMacro",[{h:"Year",k:"year"},...mc.map(k=>({h:esc(k),k,n:1,f:r=>r[k]==null?"–":k.startsWith("Demand")?pct(r[k]):fmt(r[k],1)+"%"}))],M,{empty:"Economic data loads on the next update."});
+  const ks=kwList(), Lc=(D.Locations||[]).filter(r=>r.city!=="All India");
+  table("tLoc",[{h:"City",k:"city",f:r=>`${esc(r.city)} ${r.running_campaigns?"":`<span class="tag t-down">not running</span>`}`},
+    ...ks.map(k=>({h:esc(k),k:"interest: "+k,n:1,f:r=>fmt(r["interest: "+k])})),
+    {h:"Searches / month",k:"monthly_searches_generic_total",n:1,f:r=>fmt(r.monthly_searches_generic_total)},
+    {h:"Your cost (30d)",k:"cost_30d_incl_gst",n:1,f:r=>r.running_campaigns?inr(r.cost_30d_incl_gst):"–"}],Lc,{empty:"City interest loads over the next runs."});
+}
+
+// ---------- data ----------
+function renderData(){
+  const name=$("dsSel").value||"Budget_Board", rows=D[name]||[];
+  $("dsInfo").textContent=`${fmt(rows.length)} rows`;
+  const cols=rows.length?Object.keys(rows[0]):[];
+  table("tData",cols.map(c=>({h:esc(c),k:c,n:typeof rows[0][c]==="number",f:r=>{const v=r[c];return typeof v==="number"?fmt(v,Math.abs(v)<10?2:0):esc(typeof v==="string"&&/^\d{4}-\d\d-\d\dT/.test(v)?day(v):v);}})),rows.slice(0,1000),{empty:"This dataset is empty."});
+}
+
+$("runBtn").onclick=()=>{const u=D&&D.status&&D.status.actions_url; if(u) window.open(u,"_blank","noopener");
+  $("notes").insertAdjacentHTML("afterbegin",`<div class="note"><b>Next:</b> on GitHub, open “Daily P&amp;M update” → Run workflow. Reload this page when it shows a green tick.</div>`);};
+load();
+</script>
+</body>
+</html>
