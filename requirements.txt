@@ -7,3 +7,4 @@ pytrends
 requests
 pymysql
 certifi
+cryptography
