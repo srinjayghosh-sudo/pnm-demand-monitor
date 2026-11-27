@@ -2082,7 +2082,7 @@ def build_overview(cfg, ads, trends, sh):
         pctf = lambda v: f"{v:+.0f}%"
         if n4 is not None and n4 >= 10 and b14 is not None and b14 >= 0.10:
             A.append(("Raise budget", f"Raise daily budget ~{int(min(40, max(10, round((n4 + b14 * 100) / 5) * 5)))}%",
-                      f"Demand next 4 weeks {pctf(n4)} vs normal and you already lose {b14:.0%} of impressions to budget."))
+                      f"Demand next 4 weeks {pctf(n4)} vs normal, with {b14:.0%} of impressions already lost to budget."))
         if n4 is not None and n4 >= 10 and r14 is not None and r14 >= 0.30:
             A.append(("Raise bids", "Raise bids / tCPA ~10–15%",
                       f"Demand is rising ({pctf(n4)}) and {r14:.0%} of impressions are lost to ad rank."))
@@ -2098,7 +2098,7 @@ def build_overview(cfg, ads, trends, sh):
         if r14 is not None and not any(x[0] == "Raise bids" for x in A):
             if r_base is not None and r14 - r_base >= 0.08:
                 A.append(("Weak ad rank", "Losing more auctions to ad rank",
-                          f"Lost to rank {r14:.0%} vs your normal {r_base:.0%}: competitors may be bidding up. "
+                          f"Lost to rank {r14:.0%} vs a 60-day norm of {r_base:.0%}: competitors may be bidding up. "
                           f"Check bids/tCPA and ad strength."))
             elif r14 >= 0.65:
                 A.append(("Weak ad rank", "Ad rank is very weak",
