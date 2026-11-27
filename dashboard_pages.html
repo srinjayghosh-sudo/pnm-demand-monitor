@@ -104,6 +104,9 @@ ul.ins{margin:0;padding-left:18px} ul.ins li{margin:5px 0}
 dl.gl{display:grid;grid-template-columns:max-content 1fr;gap:8px 18px;font-size:13.5px;margin:0}
 dl.gl dt{font-weight:600} dl.gl dd{margin:0;color:var(--muted)}
 .hidden{display:none !important}
+.review{background:var(--indigo-bg);border:1px solid var(--line);border-left:3px solid var(--indigo);padding:10px 14px;margin-bottom:14px;font-size:13.5px}
+.review b{color:var(--ink)} .review .q{color:var(--muted);margin-bottom:4px}
+.linkbtn{font:inherit;font-size:13px;background:none;border:0;color:var(--indigo);cursor:pointer;padding:0;text-decoration:underline}
 @media (prefers-reduced-motion:reduce){.drawer{transition:none}}
 </style>
 </head>
@@ -127,10 +130,18 @@ dl.gl dt{font-weight:600} dl.gl dd{margin:0;color:var(--muted)}
 
   <!-- ============ BUDGET BOARD ============ -->
   <section data-tab="budget">
+    <div class="panel" style="padding:12px 16px">
+      <div class="ph" style="margin:0"><div><h2 style="font-size:14.5px">Budget approach</h2>
+        <p class="explain" style="margin:2px 0 0">When demand changes there are two valid responses, and the right one depends on this month’s target and the client’s priority, so the AM / analyst decides. <b>A: Efficiency</b> moves budget with demand and keeps CPA steady. <b>B: Targets / share</b> keeps spending to the target and loosens bids when demand is low (more volume and share, but higher CPA).</p></div>
+        <div class="seg" id="strat"><button data-s="A" aria-pressed="true">A: Efficiency</button><button data-s="B" aria-pressed="false">B: Targets / share</button></div></div>
+    </div>
+    <div class="review"><div class="q"><b>From review (Malay):</b> budgets are set from monthly targets, so cutting budget whenever demand drops can leave us short at month end. This should be the AM’s call.</div>
+      <b>How it’s handled:</b> the board never forces a cut. It shows both options, marks the cities where they differ, and, when a monthly target is set, projects the month-end result under each option so the choice is made against the target.
+      <span id="tgtHow"></span></div>
     <div class="kpis" id="bbKpis"></div>
     <div class="panel">
       <div class="ph"><div><h2>Budget board: what to change in each city</h2>
-        <p class="explain">One row per city. <b>Daily spend now</b> = average of the last 7 days incl. GST. <b>Suggested</b> = daily spend × (1 + change). The change follows expected demand for the next 4 weeks (capped at ±30%), plus part of the impressions currently lost to budget; it stays at 0 if CPA has jumped. Click any row for the full reasoning and next steps.</p></div>
+        <p class="explain">One row per city, for the approach selected above. <b>Daily spend now</b> = average of the last 7 days incl. GST. <b>Suggested</b> = daily spend × (1 + change). Under A the change follows expected demand for the next 4 weeks (capped at ±30%) plus part of the impressions lost to budget; under B the budget is never cut. Rows marked <b>Decide</b> are where A and B differ. Click any row to compare both options side by side.</p></div>
         <button class="btn sm" data-csv="Budget_Board">Download CSV</button></div>
       <div class="datawrap" id="tBudget"></div>
     </div>
@@ -148,6 +159,8 @@ dl.gl dt{font-weight:600} dl.gl dd{margin:0;color:var(--muted)}
     <p class="explain" id="lede" style="font-size:17px;color:var(--ink);font-weight:500;margin:4px 0 12px"></p>
     <div class="cards" id="cards"></div>
     <div class="kpis" id="tiles"></div>
+    <div class="panel" id="citySegWrap"><div class="ph"><div><h2 style="font-size:15px;margin:0">Segments and competition in this city</h2>
+      <p class="explain">Brand, Generic / SKAG, Intercity and Competitor ad groups, with the competitor leading searches in this state. More detail is in the <button class="linkbtn" data-go="segments">Segments &amp; competitors</button> tab.</p></div></div><div id="citySeg"></div></div>
     <div class="two">
       <div class="panel"><h2 style="font-size:15px;margin:0 0 8px" id="insTitle">Quick insights</h2><ul class="ins" id="ins"></ul></div>
       <div class="panel"><h2 style="font-size:15px;margin:0 0 8px">How your delivery compares with demand</h2>
@@ -162,7 +175,7 @@ dl.gl dt{font-weight:600} dl.gl dd{margin:0;color:var(--muted)}
       <span class="lbl" style="margin-left:10px">Keyword</span><span id="kwChips"></span></div>
     <div class="panel">
       <div class="ph"><div><h2 id="kwTitle">Search trend by keyword</h2>
-        <p class="explain"><b>What the numbers mean:</b> Google Trends does not give search counts. It gives a <b>0–100 score</b> for each state: 100 = the busiest week for these keywords in that state, 50 = half as many searches as that week. So “packers and movers: 51” means about half the searches of the peak week, and “house shifting: 3.9” means it gets roughly 13× fewer searches than packers and movers. Switch to <b>“Each vs its own average”</b> to compare the shape of small keywords.</p></div>
+        <p class="explain"><b>What the numbers mean:</b> Google Trends does not give search counts. It gives a <b>0–100 score</b> for each state: 100 = the busiest week for these keywords in that state, 50 = half as many searches as that week. Example: in one week “packers and movers” scored 51 and “house shifting” 3.9. 51 ÷ 3.9 ≈ 13, so <b>packers and movers was searched about 13 times more than house shifting</b> that week. In Keyword Planner terms: if house shifting gets 1,000 searches, packers and movers gets about 13,000. The <b>Trust &amp; validation</b> tab checks this against Keyword Planner and our own Google Ads data. Switch to <b>“Each vs its own average”</b> to compare the shape of small keywords.</p></div>
         <div style="display:flex;gap:8px;align-items:center"><div class="seg" id="kwMode"><button aria-pressed="true" data-m="abs">Actual level</button><button aria-pressed="false" data-m="idx">Each vs its own average</button></div>
         <button class="btn sm" data-csv="Trends_Weekly_KW">CSV</button></div></div>
       <div class="chart"><canvas id="cKw"></canvas></div>
@@ -225,6 +238,71 @@ dl.gl dt{font-weight:600} dl.gl dd{margin:0;color:var(--muted)}
       <button class="btn sm" data-csv="Locations">CSV</button></div><div class="datawrap" id="tLoc"></div></div>
   </section>
 
+  <!-- ============ SEGMENTS ============ -->
+  <section data-tab="segments" class="hidden">
+    <div class="review"><div class="q"><b>From review (Malay):</b> can we get the same view for sub-segments within a city: intercity, SKAG, brand, competitor, generic?</div>
+      <b>How it’s handled:</b> every city is split into Brand (Porter terms), Generic / SKAG (packers and movers, house shifting, home shifting), Intercity (bike shifting, interstate shifting) and Competitor. Each gets its own spend, CPA, impression share and search demand. The top 5 competitors (NoBroker, Agarwal, Leo, Gati, Om Packers) are tracked, and the leader in each state is measured from search data.</div>
+    <div class="bar"><span class="lbl">City</span><select id="citySel5" aria-label="City"></select></div>
+    <div class="panel">
+      <div class="ph"><div><h2>Segments in this city</h2>
+        <p class="explain">Your ad groups grouped into four segments, each matched with its own Google search demand. <b>Brand</b> = Porter terms. <b>Generic / SKAG</b> = packers and movers, house shifting, home shifting. <b>Intercity</b> = bike shifting, interstate shifting. <b>Competitor</b> = ad groups on competitor names. Segments come from ad group and campaign names. Lost-to-budget isn’t available per ad group (Google reports it per campaign only). Click a row for that segment’s demand trend.</p></div>
+        <button class="btn sm" data-csv="Segments_City">Download CSV</button></div>
+      <div class="datawrap" id="tSeg"></div>
+    </div>
+    <div class="panel">
+      <div class="ph"><div><h2>Demand by segment</h2>
+        <p class="explain">Weekly Google search interest for each segment’s terms in this city’s state, all on one shared 0–100 scale so you can compare sizes directly.</p></div>
+        <button class="btn sm" data-csv="Segment_Demand_Weekly">CSV</button></div>
+      <div class="chart"><canvas id="cSegDem"></canvas></div>
+    </div>
+    <div class="two">
+      <div class="panel"><div class="ph"><div><h2 style="font-size:15px;margin:0">Which competitor leads in each state</h2>
+        <p class="explain">Share of Google searches among the five competitors tracked (NoBroker, Agarwal, Leo, Gati, Om Packers) over the last 12 months. This is measured from search data, not assumed. States where Porter runs campaigns are listed first.</p></div>
+        <button class="btn sm" data-csv="Competitor_State">CSV</button></div><div class="datawrap" id="tComp" style="max-height:420px"></div></div>
+      <div class="panel"><div class="ph"><div><h2 style="font-size:15px;margin:0">Competitor search interest over time (India)</h2>
+        <p class="explain">If one competitor’s line jumps, expect tougher auctions on competitor and generic terms.</p></div>
+        <button class="btn sm" data-csv="Competitor_Weekly">CSV</button></div><div class="chart sm"><canvas id="cComp"></canvas></div></div>
+    </div>
+    <p class="explain">Note: “agarwal packers and movers” also catches many small local firms with the Agarwal name, so its share may be overstated. The competitor list and the segment naming rules can be edited in <span class="mono">pnm_daily.py</span> (competitors, segment_rules) if your ad group names differ.</p>
+  </section>
+
+  <!-- ============ TRUST ============ -->
+  <section data-tab="trust" class="hidden">
+    <div class="review"><div class="q"><b>From review (Malay):</b> can you prove Google Trends is reliable? If the chart says the two keywords differ 13×, Keyword Planner volumes should show the same 13× ratio. Please back it with a few random examples.</div>
+      <b>How it’s handled:</b> the random examples are below (shuffle for more), each placed next to Keyword Planner where we have it. On top of that, three tests run every day. One correction on direction: a score of 51 vs 3.9 means <b>packers and movers</b> is searched about 13× <b>more</b> than house shifting, not the other way round.</div>
+    <div class="panel">
+      <div class="ph"><div><h2 style="font-size:15px;margin:0">Random worked examples</h2>
+        <p class="explain">Each row is a random week and city. Trends ratio = packers and movers score ÷ the other keyword’s score. The last columns translate that into Keyword Planner terms and show Keyword Planner’s own ratio where we have it.</p></div>
+        <button class="btn sm" id="shuffle" type="button">Shuffle examples</button></div>
+      <div class="datawrap" id="tEx" style="max-height:340px"></div>
+    </div>
+    <div class="panel">
+      <h2>Can we trust Google Trends?</h2>
+      <p class="explain" style="max-width:none">Google Trends gives a relative 0–100 score, not search counts, so we test it three ways. <b>1) Our own Google Ads data:</b> impressions ÷ impression share = the number of searches we were eligible for, counted by Google itself. If Trends is reliable, the two should rise and fall together. <b>2) Keyword Planner ratio test:</b> if Trends says packers and movers is 13× house shifting, Keyword Planner volumes should show roughly the same ratio. <b>3) Data quality:</b> in low-volume states Google Trends rounds small numbers down to 0, which makes the lines spiky. Those states are flagged so we don’t over-read them.</p>
+    </div>
+    <div class="panel">
+      <div class="ph"><div><h2 style="font-size:15px;margin:0">Test 1: Trends vs our own Google Ads searches</h2>
+        <p class="explain">Correlation over the last 52 weeks (1.0 = they move perfectly together, 0 = unrelated). 0.6 or more is a strong match; 0.35–0.6 is moderate. “Weekly change” compares week-to-week moves, which is the harder test.</p></div>
+        <button class="btn sm" data-csv="Validation_Ads">CSV</button></div>
+      <div class="datawrap" id="tValAds" style="max-height:300px"></div>
+      <div class="bar" style="margin-top:12px"><span class="lbl">City</span><select id="citySel6" aria-label="City"></select></div>
+      <div class="chart sm"><canvas id="cValAds"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="ph"><div><h2 style="font-size:15px;margin:0">Test 2: Keyword Planner ratio test</h2>
+        <p class="explain">For each keyword, the Keyword Planner ratio is packers and movers searches ÷ that keyword’s searches over the same months. The Trends ratio is the same calculation using Trends scores. Within ±25% counts as a match. Keyword Planner rounds its volumes, so small gaps are normal.</p></div>
+        <button class="btn sm" data-csv="Validation_KP">CSV</button></div>
+      <div class="datawrap" id="tValKP" style="max-height:320px"></div>
+      <p class="explain" style="margin-top:10px"><b>How to add Keyword Planner data</b> (no API access needed): in Google Ads, open Tools → Keyword Planner → Get search volume and forecasts. Paste <i>packers and movers, house shifting, home shifting, bike shifting</i>, set the location (India, or one state), then download the results as CSV. Rename the file <span class="mono">kp_IN.csv</span> (or <span class="mono">kp_IN-KA.csv</span> for Karnataka, <span class="mono">kp_IN-MH.csv</span> for Maharashtra, and so on), upload it to the <span class="mono">keyword_planner</span> folder on GitHub, and run the workflow. Once Basic API access is approved, this test runs automatically for every city.</p>
+    </div>
+    <div class="panel">
+      <div class="ph"><div><h2 style="font-size:15px;margin:0">Test 3: Data quality by state</h2>
+        <p class="explain">The share of weeks where Trends returned 0, and how much the score swings week to week. “Too little search volume” means that line is only a rough guide, which is why some city charts look spiky.</p></div>
+        <button class="btn sm" data-csv="Data_Quality">CSV</button></div>
+      <div class="datawrap" id="tDQ" style="max-height:360px"></div>
+    </div>
+  </section>
+
   <!-- ============ DATA ============ -->
   <section data-tab="data" class="hidden">
     <div class="panel">
@@ -236,6 +314,12 @@ dl.gl dt{font-weight:600} dl.gl dd{margin:0;color:var(--muted)}
       <div class="datawrap" id="tData"></div>
     </div>
     <div class="panel">
+      <h2 style="font-size:15px;margin:0 0 10px">Questions from review</h2>
+      <dl class="gl" style="margin-bottom:18px">
+        <dt>Is Google Trends reliable?</dt><dd>Random worked examples, a Keyword Planner ratio check, a check against our own Google Ads searches, and a data-quality flag per state. <button class="linkbtn" data-go="trust">Open Trust &amp; validation</button></dd>
+        <dt>Don’t force budget cuts</dt><dd>Two options (A: efficiency, B: targets / share), the AM decides, with month-end pacing against targets. <button class="linkbtn" data-go="budget">Open Budget board</button></dd>
+        <dt>Segments within a city</dt><dd>Brand, Generic / SKAG, Intercity and Competitor per city, plus the top 5 competitors and the leader in each state. <button class="linkbtn" data-go="segments">Open Segments &amp; competitors</button></dd>
+      </dl>
       <h2 style="font-size:15px;margin:0 0 10px">What the terms mean</h2>
       <dl class="gl">
         <dt>Google Trends score</dt><dd>0–100 per state. 100 = the busiest week for these keywords in that state; 50 = half as many searches. A relative measure, not a search count.</dd>
@@ -282,7 +366,7 @@ const day=s=>s?String(s).slice(0,10):"–";
 const ALL="All keywords";
 let D=null, CITY=null, KW=ALL, KWMODE="abs", charts={}, TAB="budget", SORT={};
 
-const TABS=[["budget","Budget board"],["cities","Cities"],["demand","Demand trends"],["plan","Plan ahead"],["external","External factors"],["data","Data & downloads"]];
+const TABS=[["budget","Budget board"],["cities","Cities"],["segments","Segments & competitors"],["demand","Demand trends"],["plan","Plan ahead"],["external","External factors"],["trust","Trust & validation"],["data","Data & downloads"]];
 $("tabs").innerHTML=TABS.map(([k,l])=>`<button class="tab" role="tab" data-t="${k}" aria-selected="${k===TAB}">${l}</button>`).join("");
 document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>showTab(b.dataset.t));
 function showTab(t){TAB=t;document.querySelectorAll(".tab").forEach(b=>b.setAttribute("aria-selected",b.dataset.t===t));
@@ -322,6 +406,7 @@ function toCSV(rows){ if(!rows||!rows.length) return ""; const cols=[...new Set(
 function download(name,rows){ const blob=new Blob(["\ufeff"+toCSV(rows)],{type:"text/csv;charset=utf-8"});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`${name}_${new Date().toISOString().slice(0,10)}.csv`;
   document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500); }
+document.addEventListener("click",e=>{const g=e.target.closest("[data-go]");if(g){showTab(g.dataset.go);window.scrollTo(0,0);}});
 document.addEventListener("click",e=>{const b=e.target.closest("[data-csv]"); if(b&&D) download(b.dataset.csv,D[b.dataset.csv]||[]);});
 
 // ---------- drawer ----------
@@ -380,7 +465,7 @@ async function load(fromGate){
   $("notes").innerHTML=(st.error?`<div class="note err"><b>Last update had a problem.</b> ${esc(st.error)}</div>`:"")+((m.notices)||[]).map(n=>`<div class="note"><b>Note:</b> ${esc(n)}</div>`).join("");
   if(D.empty){$("tBudget").innerHTML=`<div class="empty">No data yet. Click “Run update now” and run the workflow on GitHub.</div>`;return;}
   const cities=(D.Overview||[]).map(r=>r.city); if(!CITY||!cities.includes(CITY)) CITY=cities[0];
-  ["citySel","citySel2","citySel3","citySel4"].forEach(id=>{$(id).innerHTML=cities.map(c=>`<option ${c===CITY?"selected":""}>${esc(c)}</option>`).join("");
+  ["citySel","citySel2","citySel3","citySel4","citySel5","citySel6"].forEach(id=>{$(id).innerHTML=cities.map(c=>`<option ${c===CITY?"selected":""}>${esc(c)}</option>`).join("");
     $(id).onchange=e=>{CITY=e.target.value;syncCity();renderTab();};});
   const chips=id=>{$(id).innerHTML=[ALL,...kwList()].map(k=>`<button class="chip" aria-pressed="${k===KW}" data-k="${esc(k)}">${k===ALL?"":`<i style="background:${kwColor(k)}"></i>`}${esc(k)}</button>`).join("");
     $(id).querySelectorAll(".chip").forEach(b=>b.onclick=()=>{KW=b.dataset.k;renderTab();});};
@@ -390,35 +475,47 @@ async function load(fromGate){
   $("notesList").innerHTML=(D.Notes||[]).map(n=>`<li>${esc(n.Notes)}</li>`).join("");
   renderTab();
 }
-function syncCity(){["citySel","citySel2","citySel3","citySel4"].forEach(id=>$(id).value=CITY);}
+function syncCity(){["citySel","citySel2","citySel3","citySel4","citySel5","citySel6"].forEach(id=>$(id).value=CITY);}
 function renderTab(){ if(!D||D.empty) return;
   document.querySelectorAll(".chip[data-k]").forEach(b=>b.setAttribute("aria-pressed",b.dataset.k===KW));
-  ({budget:renderBudget,cities:renderCities,demand:renderDemand,plan:renderPlan,external:renderExternal,data:renderData})[TAB](); }
+  ({budget:renderBudget,cities:renderCities,segments:renderSegments,demand:renderDemand,plan:renderPlan,external:renderExternal,trust:renderTrust,data:renderData})[TAB](); }
 
 // ---------- budget board ----------
+let STRAT="A";
+const opt=r=>STRAT==="A"?{pct:r.option_a_budget_pct??r.budget_change_pct,amt:r.option_a_daily_budget??r.suggested_daily_budget,bids:r.option_a_bids??r.bid_action}
+                        :{pct:r.option_b_budget_pct??r.budget_change_pct,amt:r.option_b_daily_budget??r.suggested_daily_budget,bids:r.option_b_bids??r.bid_action};
 function renderBudget(){
-  const B=D.Budget_Board||[]; const all=B.find(r=>r.city==="All India"); const C=B.filter(r=>r.city!=="All India");
-  const sumNow=C.reduce((a,r)=>a+(r.avg_daily_spend_7d||0),0), sumNew=C.reduce((a,r)=>a+(r.suggested_daily_budget||0),0);
+  document.querySelectorAll("#strat button").forEach(b=>{b.setAttribute("aria-pressed",b.dataset.s===STRAT);b.onclick=()=>{STRAT=b.dataset.s;renderBudget();};});
+  const B=(D.Budget_Board||[]).map(r=>{const o=opt(r);return {...r,_pct:o.pct,_amt:o.amt,_bids:o.bids};}); const all=B.find(r=>r.city==="All India"); const C=B.filter(r=>r.city!=="All India");
+  const sumNow=C.reduce((a,r)=>a+(r.avg_daily_spend_7d||0),0), sumNew=C.reduce((a,r)=>a+(r._amt||0),0);
   const k=(l,v,h)=>`<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="h">${h}</div></div>`;
   $("bbKpis").innerHTML=[k("Daily spend now (all cities)",inr(sumNow),"7-day average, incl. GST"),
     k("Suggested daily total",inr(sumNew),`${pct(sumNow?(sumNew/sumNow-1)*100:null)} vs now`),
-    k("Raise budget",C.filter(r=>r.budget_change_pct>0).length+" cities",C.filter(r=>r.budget_change_pct>0).map(r=>r.city).slice(0,4).join(", ")||"–"),
-    k("Trim budget",C.filter(r=>r.budget_change_pct<0).length+" cities",C.filter(r=>r.budget_change_pct<0).map(r=>r.city).slice(0,4).join(", ")||"–"),
-    k("Raise bids / tCPA",C.filter(r=>/Raise/.test(r.bid_action)).length+" cities",C.filter(r=>/Raise/.test(r.bid_action)).map(r=>r.city).slice(0,4).join(", ")||"–"),
+    k("Raise budget",C.filter(r=>r._pct>0).length+" cities",C.filter(r=>r._pct>0).map(r=>r.city).slice(0,4).join(", ")||"–"),
+    k(STRAT==="A"?"Trim budget":"Loosen bids",(STRAT==="A"?C.filter(r=>r._pct<0):C.filter(r=>/Relax/.test(r._bids))).length+" cities",(STRAT==="A"?C.filter(r=>r._pct<0):C.filter(r=>/Relax/.test(r._bids))).map(r=>r.city).slice(0,4).join(", ")||"–"),
+    k("Needs AM decision",C.filter(r=>r.needs_am_decision).length+" cities","A and B lead to different actions"),
+    ...(B.some(r=>r.target_conversions!=null)?[k("Behind target (this option)",C.filter(r=>(STRAT==="A"?r.pace_conv_a_pct:r.pace_conv_b_pct)<-5).length+" cities","projected month-end conversions more than 5% short")]:[]),
     k("All India demand",pct(all&&all.demand_now_pct),`next 4 weeks ${pct(all&&all.demand_next4w_pct)}`)].join("");
   const chTag=v=>`<span class="tag ${v>0?"t-up":v<0?"t-down":"t-flat"}">${v>0?"+":""}${fmt(v)}%</span>`;
+  const hasT=B.some(r=>r.target_conversions!=null||r.target_spend!=null);
+  $("tgtHow").innerHTML=hasT?"":` To switch on target pacing, add this month’s targets to <span class="mono">targets.csv</span> on GitHub (columns: month, city, target_conversions, target_spend_incl_gst; for example <span class="mono">2026-12,Bangalore,900,1200000</span>).`;
+  const pK=STRAT==="A"?"pace_conv_a_pct":"pace_conv_b_pct", prK=STRAT==="A"?"proj_conv_a":"proj_conv_b";
+  const tcols=hasT?[{h:"Target conv.",k:"target_conversions",n:1,f:r=>fmt(r.target_conversions)},
+    {h:"Projected",k:prK,n:1,f:r=>fmt(r[prK])},{h:"vs target",k:pK,n:1,f:r=>r[pK]==null?"–":`<span class="tag ${r[pK]>=-5?"t-up":r[pK]>=-15?"t-down":"t-bad"}">${pct(r[pK])}</span>`}]:[];
   table("tBudget",[
     {h:"City",k:"city",f:r=>`<b>${esc(r.city)}</b>`},
     {h:"Daily spend now",k:"avg_daily_spend_7d",n:1,f:r=>inr(r.avg_daily_spend_7d)},
-    {h:"Change",k:"budget_change_pct",n:1,f:r=>chTag(r.budget_change_pct)},
-    {h:"Suggested daily",k:"suggested_daily_budget",n:1,f:r=>`<b>${inr(r.suggested_daily_budget)}</b>`},
-    {h:"Bids",k:"bid_action",f:r=>`<span class="tag ${/Raise/.test(r.bid_action)?"t-up":"t-flat"}">${esc(r.bid_action)}</span>`},
+    {h:"Change",k:"_pct",n:1,f:r=>chTag(r._pct)},
+    {h:"Suggested daily",k:"_amt",n:1,f:r=>`<b>${inr(r._amt)}</b>`},
+    {h:"Bids",k:"_bids",f:r=>`<span class="tag ${/Raise|Relax/.test(r._bids)?"t-up":"t-flat"}">${esc(r._bids)}</span>`},
+    {h:"A vs B",k:"needs_am_decision",f:r=>r.needs_am_decision?`<span class="tag t-info">Decide</span>`:`<span class="tag t-flat">Same</span>`},
     {h:"Demand now",k:"demand_now_pct",n:1,f:r=>tag(r.demand_now_pct)},
     {h:"Next 4 wks",k:"demand_next4w_pct",n:1,f:r=>tag(r.demand_next4w_pct)},
     {h:"Impr. share",k:"impr_share_14d",n:1,f:r=>share(r.impr_share_14d)},
     {h:"Lost: budget",k:"lost_to_budget_14d",n:1,f:r=>lostTag(r.lost_to_budget_14d,.15)},
     {h:"Lost: rank",k:"lost_to_rank_14d",n:1,f:r=>lostTag(r.lost_to_rank_14d,.5)},
     {h:"CPA 30d",k:"cpa_30d_incl_gst",n:1,f:r=>`${inr(r.cpa_30d_incl_gst)} ${r.cpa_change_pct==null?"":tag(r.cpa_change_pct,15,true)}`},
+    ...tcols,
     {h:"Confidence",k:"confidence",f:r=>`<span class="tag ${r.confidence==="High"?"t-up":r.confidence==="Low"?"t-bad":"t-info"}">${r.confidence}</span>`},
   ],B,{click:r=>budgetDrawer(r)});
 }
@@ -426,12 +523,21 @@ function budgetDrawer(r){
   const steps=(r.way_forward||"").split(/\s*\d\)\s*/).filter(Boolean);
   const daily=(D.Daily_Aligned||[]).filter(x=>x.city===r.city).slice(-60);
   openDrawer(`${r.city}: budget plan`,
-    kv([["Daily spend now",inr(r.avg_daily_spend_7d)+" (7-day avg, incl. GST)"],["Suggested daily budget",`<b>${inr(r.suggested_daily_budget)}</b> (${r.budget_change_pct>0?"+":""}${fmt(r.budget_change_pct)}%)`],
-      ["Bids",esc(r.bid_action)],["Demand now / next 4 weeks",`${pct(r.demand_now_pct)} / ${pct(r.demand_next4w_pct)}`],
+    kv([["Daily spend now",inr(r.avg_daily_spend_7d)+" (7-day avg, incl. GST)"],["Demand now / next 4 weeks",`${pct(r.demand_now_pct)} / ${pct(r.demand_next4w_pct)}`],
       ["Impression share",share(r.impr_share_14d)+` · lost to budget ${share(r.lost_to_budget_14d)} · lost to rank ${share(r.lost_to_rank_14d)}`],
       ["CPA (30 days)",`${inr(r.cpa_30d_incl_gst)} (${pct(r.cpa_change_pct)} vs previous 30) · ${fmt(r.conversions_30d)} conversions`],
       ["Confidence",`${r.confidence}${r.forecast_error_pct!=null?` · outlook tested within ±${fmt(r.forecast_error_pct)}%`:""}`]])
-    +`<h3 style="font-size:14px;margin:14px 0 6px">Why</h3><p style="margin:0;color:var(--muted)">${esc(r.why)}</p>
+    +`<h3 style="font-size:14px;margin:14px 0 8px">Two options: the AM decides</h3>
+      <div class="two" style="gap:10px">${[["A: Efficiency","a"],["B: Targets / share","b"]].map(([t,x])=>`<div class="card ${x==="a"?"info":"up"}" style="margin:0">
+        <div class="k">${t}</div><div class="t">${inr(r["option_"+x+"_daily_budget"]??r.suggested_daily_budget)} / day <span style="font-weight:400;color:var(--muted)">(${(r["option_"+x+"_budget_pct"]??r.budget_change_pct)>0?"+":""}${fmt(r["option_"+x+"_budget_pct"]??r.budget_change_pct)}%)</span></div>
+        <div class="w"><b>Bids:</b> ${esc(r["option_"+x+"_bids"]??r.bid_action)}<br>${esc(r["option_"+x+"_note"]||"")}</div></div>`).join("")}</div>
+      ${r.target_conversions!=null||r.target_spend!=null?`<h3 style="font-size:14px;margin:14px 0 6px">Month-end vs target (${esc(r.target_month)}, ${r.days_left} days left)</h3>
+        <div class="datawrap"><table><thead><tr><th></th><th>Target</th><th>Month to date</th><th>A: Efficiency</th><th>B: Targets / share</th></tr></thead><tbody>
+        <tr><td>Conversions</td><td class="n">${fmt(r.target_conversions)}</td><td class="n">${fmt(r.mtd_conversions)}</td><td class="n">${fmt(r.proj_conv_a)} ${r.pace_conv_a_pct==null?"":tag(r.pace_conv_a_pct,5)}</td><td class="n">${fmt(r.proj_conv_b)} ${r.pace_conv_b_pct==null?"":tag(r.pace_conv_b_pct,5)}</td></tr>
+        <tr><td>Spend</td><td class="n">${inr(r.target_spend)}</td><td class="n">${inr(r.mtd_spend)}</td><td class="n">${inr(r.proj_spend_a)}</td><td class="n">${inr(r.proj_spend_b)}</td></tr></tbody></table></div>
+        <p class="explain" style="margin-top:6px">${esc(r.target_hint||"")} Projection = month to date + remaining days × suggested daily budget ÷ CPA. Option B assumes CPA rises about ${fmt((D.meta||{}).tcpa_relax_pct||12.5,1)}% when tCPA is loosened. Recent conversions are still settling, so month to date reads slightly low.</p>`:""}
+      ${segMini(r.city)}
+      <h3 style="font-size:14px;margin:14px 0 6px">Why</h3><p style="margin:0;color:var(--muted)">${esc(r.why)}</p>
       <h3 style="font-size:14px;margin:14px 0 6px">Way forward</h3><ol class="steps">${steps.map(s=>`<li>${esc(s)}</li>`).join("")}</ol>
       <h3 style="font-size:14px;margin:16px 0 6px">Last 60 days: spend vs demand</h3><div class="chart sm"><canvas id="dChart"></canvas></div>
       <div style="margin-top:10px"><button class="btn sm" id="dCsv">Download this city’s daily data</button></div>`,
@@ -443,7 +549,7 @@ function budgetDrawer(r){
 }
 
 // ---------- cities ----------
-const kindCls=k=>({"Raise budget":"up","Raise bids":"up","Prepare":"up","Early signal":"info","Festival ahead":"info","Trim budget":"down","Budget-capped":"bad","Weak ad rank":"bad","Check efficiency":"bad","Missed demand":"bad"})[k]||"";
+const kindCls=k=>({"Low demand":"down","Raise budget":"up","Raise bids":"up","Prepare":"up","Early signal":"info","Festival ahead":"info","Trim budget":"down","Budget-capped":"bad","Weak ad rank":"bad","Check efficiency":"bad","Missed demand":"bad"})[k]||"";
 function renderCities(){
   table("tOverview",[
     {h:"City",k:"city",f:r=>`<b>${esc(r.city)}</b>`},{h:"Demand now",k:"demand_now_pct",n:1,f:r=>tag(r.demand_now_pct)},
@@ -460,6 +566,7 @@ function renderCities(){
   $("tiles").innerHTML=[t("Demand now",pct(d7),"last 7 days vs normal"),t("Next 4 weeks",pct(n4),"expected vs a normal week"),
     t("Impression share",share(o.impr_share_14d),"last 14 days"),t("Lost to budget",share(o.lost_to_budget_14d),`your normal ${share(o.lost_to_budget_normal)}`),
     t("Lost to rank",share(o.lost_to_rank_14d),`your normal ${share(o.lost_to_rank_normal)}`),t("CPA (30d)",inr(o.cpa_30d_incl_gst),`${pct(o.cpa_change_pct)} vs previous 30 days`)].join("");
+  $("citySeg").innerHTML=segMini(CITY).replace(/^<h3[^>]*>[^<]*<\/h3>/,"")||`<div class="empty">Segment data loads on the next update.</div>`;
   const dk=(D.meta&&D.meta.decision_keyword)||"packers and movers"; $("insTitle").textContent=`Quick insights (based on “${dk}”)`;
   $("ins").innerHTML=rowsC("Insights").map(i=>`<li>${esc(i.insight)}</li>`).join("")||`<li class="empty">Builds up as data loads.</li>`;
   const wk=rowsC("Weekly");
@@ -545,6 +652,92 @@ function renderExternal(){
     ...ks.map(k=>({h:esc(k),k:"interest: "+k,n:1,f:r=>fmt(r["interest: "+k])})),
     {h:"Searches / month",k:"monthly_searches_generic_total",n:1,f:r=>fmt(r.monthly_searches_generic_total)},
     {h:"Your cost (30d)",k:"cost_30d_incl_gst",n:1,f:r=>r.running_campaigns?inr(r.cost_30d_incl_gst):"–"}],Lc,{empty:"City interest loads over the next runs."});
+}
+
+function stateOf(city){const m=D.meta||{};const g=(m.city_geo||{})[city];return g?((m.state_names||{})[g]||null):null;}
+function leaderOf(city){const st=stateOf(city);const r=(D.Competitor_State||[]).find(x=>x.state===st);return r?`${r.leader}${r.leader_share_pct!=null?` (${fmt(r.leader_share_pct)}% of competitor searches in ${st})`:""}`:null;}
+function segMini(city){const R=(D.Segments_City||[]).filter(x=>x.city===city);const L=leaderOf(city);
+  if(!R.length&&!L) return "";
+  return `<h3 style="font-size:14px;margin:14px 0 6px">Segments and competition</h3>`+(R.length?`<div class="datawrap"><table><thead><tr><th>Segment</th><th>Share of spend</th><th>CPA</th><th>Impr. share</th><th>Lost: rank</th><th>Demand</th></tr></thead><tbody>${
+    R.map(x=>`<tr><td>${esc(x.segment)}</td><td class="n">${x.share_of_spend_pct==null?"–":fmt(x.share_of_spend_pct)+"%"}</td><td class="n">${inr(x.cpa_30d)}</td><td class="n">${share(x.impr_share_14d)}</td><td class="n">${share(x.lost_to_rank_14d)}</td><td class="n">${tag(x.demand_last4w_vs_12m_pct)}</td></tr>`).join("")}</tbody></table></div>`:"")
+   +(L?`<p class="explain" style="margin-top:6px">Leading competitor in this state: <b>${esc(L)}</b>.</p>`:"");}
+// ---------- segments ----------
+const SEGC={"Brand":"--indigo","Generic / SKAG":"--teal","Intercity":"--amber","Competitor":"--pink"};
+function renderSegments(){
+  const R=(D.Segments_City||[]).filter(r=>r.city===CITY);
+  table("tSeg",[{h:"Segment",k:"segment",f:r=>`<b>${esc(r.segment)}</b>`},{h:"Cost 30d",k:"cost_30d",n:1,f:r=>inr(r.cost_30d)},
+    {h:"Share of spend",k:"share_of_spend_pct",n:1,f:r=>r.share_of_spend_pct==null?"–":fmt(r.share_of_spend_pct)+"%"},
+    {h:"Conv. 30d",k:"conversions_30d",n:1,f:r=>fmt(r.conversions_30d)},{h:"CPA",k:"cpa_30d",n:1,f:r=>inr(r.cpa_30d)},
+    {h:"Impr. share",k:"impr_share_14d",n:1,f:r=>share(r.impr_share_14d)},{h:"Lost: rank",k:"lost_to_rank_14d",n:1,f:r=>lostTag(r.lost_to_rank_14d,.5)},
+    {h:"Demand (4 wks vs 12m)",k:"demand_last4w_vs_12m_pct",n:1,f:r=>tag(r.demand_last4w_vs_12m_pct)},
+    {h:"Suggestion",k:"suggestion",w:1,f:r=>esc(r.suggestion)}],R,
+    {empty:"Segment data loads on the next update (ad group data from Google Ads).",click:r=>segDrawer(r)});
+  const W=(D.Segment_Demand_Weekly||[]).filter(r=>r.city===CITY);
+  if(!W.length) pending("cSegDem","Segment demand loads over the next runs (a few states per run)."); else { ready("cSegDem");
+    const weeks=[...new Set(W.map(r=>r.week_start))].sort(), terms=[...new Set(W.map(r=>r.term))];
+    const segOf=Object.fromEntries(W.map(r=>[r.term,r.segment]));
+    chart("cSegDem","line",weeks,terms.map((t,i)=>({label:`${t} (${segOf[t]})`,data:weeks.map(w=>(W.find(r=>r.term===t&&r.week_start===w)||{}).idx??null),
+      borderColor:css(SEGC[segOf[t]]||"--muted"),backgroundColor:css(SEGC[segOf[t]]||"--muted"),borderDash:i%2?[5,4]:[],borderWidth:2,pointRadius:0,tension:.25,spanGaps:true})),
+      {y:"Search interest (0–100, shared scale)"},true); }
+  const C=D.Competitor_State||[], comps=(D.meta&&D.meta.competitors)||[];
+  table("tComp",[{h:"State",k:"state",f:r=>`${esc(r.state)}${r.porter_runs_here?` <span class="tag t-info">Porter</span>`:""}`},
+    {h:"Leader",k:"leader",f:r=>`<b>${esc(r.leader)}</b>`},{h:"Leader share",k:"leader_share_pct",n:1,f:r=>r.leader_share_pct==null?"–":fmt(r.leader_share_pct)+"%"},
+    ...comps.map(c=>({h:esc(c),k:c,n:1,f:r=>r[c]==null?"–":fmt(r[c])+"%"}))],C,{empty:"Competitor data loads on the next update."});
+  const CW=D.Competitor_Weekly||[];
+  if(!CW.length) pending("cComp","Loads on the next update."); else { ready("cComp");
+    const weeks=[...new Set(CW.map(r=>r.week_start))].sort(), pal=["--pink","--amber","--violet","--indigo","--teal"];
+    chart("cComp","line",weeks,comps.map((c,i)=>({label:c,data:weeks.map(w=>(CW.find(r=>r.competitor===c&&r.week_start===w)||{}).idx??null),
+      borderColor:css(pal[i%5]),backgroundColor:css(pal[i%5]),borderWidth:2,pointRadius:0,tension:.25,spanGaps:true})),{y:"Search interest (0–100)"},true); }
+}
+function segDrawer(r){
+  const W=(D.Segment_Demand_Weekly||[]).filter(x=>x.city===r.city&&x.segment===r.segment), weeks=[...new Set(W.map(x=>x.week_start))].sort(), terms=[...new Set(W.map(x=>x.term))];
+  openDrawer(`${r.city}: ${r.segment}`,kv([["Cost (30 days)",inr(r.cost_30d)+` · ${fmt(r.share_of_spend_pct)}% of city spend`],["Conversions / CPA",`${fmt(r.conversions_30d)} · ${inr(r.cpa_30d)}`],
+    ["Impression share",share(r.impr_share_14d)+` · lost to rank ${share(r.lost_to_rank_14d)}`],["Demand",pct(r.demand_last4w_vs_12m_pct)+" (last 4 weeks vs 12-month average)"],["Ad groups",r.ad_groups],["Suggestion",esc(r.suggestion)]])
+    +`<h3 style="font-size:14px;margin:14px 0 6px">Demand for this segment’s terms</h3><div class="chart sm"><canvas id="dChart"></canvas></div>`,
+    ()=>{ if(W.length) chart("dChart","line",weeks,terms.map((t,i)=>({label:t,data:weeks.map(w=>(W.find(x=>x.term===t&&x.week_start===w)||{}).idx??null),borderColor:css(i?"--amber":"--teal"),backgroundColor:css(i?"--amber":"--teal"),borderWidth:2,pointRadius:0,tension:.25,spanGaps:true})),{y:"Search interest"},true);
+      else $("dChart").parentElement.innerHTML=`<div class="empty">Demand for this segment loads over the next runs.</div>`; });
+}
+
+// ---------- trust ----------
+let EXSEED=1;
+function examples(){
+  const T=(D.Trends_Weekly_KW||[]), dk=(D.meta||{}).decision_keyword||"packers and movers", KP=D.Validation_KP||[];
+  const by={}; T.forEach(r=>{const k=r.city+"|"+String(r.week_start).slice(0,10);(by[k]=by[k]||{})[r.kw]=r.idx;});
+  const cand=[]; Object.entries(by).forEach(([k,v])=>{const [city,week]=k.split("|");Object.entries(v).forEach(([kw,x])=>{if(kw!==dk&&kwList().includes(kw)&&x>=1&&v[dk]>=5)cand.push({city,week,kw,pm:v[dk],x});});});
+  let seed=EXSEED; const rnd=()=>{seed=(seed*16807)%2147483647;return seed/2147483647;};
+  const pick=[]; const used=new Set();
+  for(let i=0;i<60&&pick.length<6&&cand.length;i++){const c=cand[Math.floor(rnd()*cand.length)];const key=c.city+c.kw;if(used.has(key))continue;used.add(key);pick.push(c);}
+  return pick.map(c=>{const g=((D.meta||{}).city_geo||{})[c.city]||"IN";const kp=KP.find(x=>x.geo===g&&x.keyword===c.kw);const ratio=c.pm/c.x;
+    return {...c,ratio,kp:kp?kp.keyword_planner_ratio:null,kpv:kp?kp.verdict:null};});
+}
+function renderTrust(){
+  $("shuffle").onclick=()=>{EXSEED=(EXSEED*48271)%2147483647||7;renderTrust();};
+  const dk=(D.meta||{}).decision_keyword||"packers and movers";
+  table("tEx",[{h:"City",k:"city"},{h:"Week",k:"week"},{h:"Keyword",k:"kw",f:r=>`<b>${esc(r.kw)}</b>`},
+    {h:esc(dk),k:"pm",n:1,f:r=>fmt(r.pm,1)},{h:"Keyword score",k:"x",n:1,f:r=>fmt(r.x,1)},
+    {h:"Trends ratio",k:"ratio",n:1,f:r=>`<b>${fmt(r.ratio,1)}×</b>`},
+    {h:"In Keyword Planner terms",k:"ratio",w:1,f:r=>`If ${esc(r.kw)} gets 1,000 searches, ${esc(dk)} gets about ${fmt(Math.round(r.ratio*1000/10)*10)}`},
+    {h:"Keyword Planner ratio",k:"kp",n:1,f:r=>r.kp==null?`<span class="tag t-flat">not yet</span>`:`${fmt(r.kp,1)}× <span class="tag ${/^Matches/.test(r.kpv)?"t-up":/Roughly/.test(r.kpv)?"t-info":"t-bad"}">${esc(r.kpv)}</span>`}],
+    examples(),{empty:"Examples appear once daily Trends history has loaded for a few states."});
+  const vt=v=>`<span class="tag ${/Strong|^Matches|Reliable/.test(v)?"t-up":/Moderate|Roughly|Usable/.test(v)?"t-info":/Weak|not match|Too little/.test(v)?"t-bad":"t-flat"}">${esc(v)}</span>`;
+  table("tValAds",[{h:"City",k:"city",f:r=>`<b>${esc(r.city)}</b>`},{h:"Weeks compared",k:"weeks_compared",n:1},
+    {h:"Match (level)",k:"match_level_r",n:1,f:r=>r.match_level_r==null?"–":fmt(r.match_level_r,2)},
+    {h:"Match (weekly change)",k:"match_weekly_change_r",n:1,f:r=>r.match_weekly_change_r==null?"–":fmt(r.match_weekly_change_r,2)},
+    {h:"Verdict",k:"verdict",f:r=>vt(r.verdict)}],D.Validation_Ads||[],{empty:"Runs once Trends history and impression share are loaded.",click:r=>{CITY=r.city;syncCity();renderTrust();},sel:r=>r.city===CITY});
+  const W=(D.Validation_Ads_Weekly||[]).filter(r=>r.city===CITY);
+  if(!W.length) pending("cValAds","No comparison for this city yet."); else { ready("cValAds");
+    chart("cValAds","line",W.map(r=>r.week_start),[
+      {label:"Our eligible searches (Google Ads)",data:W.map(r=>r.eligible_index),borderColor:css("--indigo"),backgroundColor:css("--indigo"),borderWidth:2,pointRadius:0,tension:.25},
+      {label:"Google Trends",data:W.map(r=>r.trends_index),borderColor:css("--teal"),backgroundColor:css("--teal"),borderWidth:2,pointRadius:0,tension:.25}],
+      {y:"100 = each line’s own average"},true,{tooltip:{label:c=>`${c.dataset.label}: ${fmt(c.parsed.y)} (${pct(c.parsed.y-100)} vs average)`}}); }
+  table("tValKP",[{h:"Source",k:"source"},{h:"Where",k:"geo"},{h:"Keyword",k:"keyword",f:r=>`<b>${esc(r.keyword)}</b>`},{h:"Months",k:"months",n:1},
+    {h:"Keyword Planner: P&M is ×",k:"keyword_planner_ratio",n:1,f:r=>r.keyword_planner_ratio==null?"–":fmt(r.keyword_planner_ratio,1)+"×"},
+    {h:"Trends: P&M is ×",k:"trends_ratio",n:1,f:r=>r.trends_ratio==null?"–":fmt(r.trends_ratio,1)+"×"},
+    {h:"Gap",k:"difference_pct",n:1,f:r=>pct(r.difference_pct)},{h:"Monthly shape",k:"monthly_shape_r",n:1,f:r=>r.monthly_shape_r==null?"–":fmt(r.monthly_shape_r,2)},
+    {h:"Verdict",k:"verdict",f:r=>vt(r.verdict)}],D.Validation_KP||[],{empty:"No Keyword Planner data yet. Add a download as described below, or wait for Basic API access."});
+  table("tDQ",[{h:"State",k:"state"},{h:"Cities",k:"cities",w:1},{h:"Keyword",k:"keyword"},{h:"Weeks",k:"weeks",n:1},
+    {h:"Zero weeks",k:"zero_weeks_pct",n:1,f:r=>fmt(r.zero_weeks_pct)+"%"},{h:"Swing",k:"week_to_week_swing",n:1,f:r=>r.week_to_week_swing==null?"–":fmt(r.week_to_week_swing,2)},
+    {h:"Verdict",k:"verdict",w:1,f:r=>vt(r.verdict)}],D.Data_Quality||[],{empty:"Runs once the 5-year Trends history has loaded."});
 }
 
 // ---------- data ----------
