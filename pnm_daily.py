@@ -74,6 +74,7 @@ CONFIG = {
     "forecast_states_per_run": 4,                # at most this many 5-year pulls per run (rate limits)
     "forecast_threshold_pct": 12,                # weeks this far above/below normal get a budget note
     # Monthly search volumes from Google Ads Keyword Planner (exact numbers, incl. brand terms)
+    "keyword_planner_enabled": False,   # needs Basic API access (not available); keep off
     "kp_refresh_days": 30,
     "kp_keywords": {
         "Generic": ["packers and movers", "packers and movers near me", "house shifting",
@@ -1462,7 +1463,10 @@ def run_planning_jobs(cfg):
         except Exception as e:
             con = db_connect(cfg); log(con, "warn", f"Google Trends cities: {str(e)[:200]}")
 
-    # 3) Keyword Planner monthly volumes per city (Google Ads API, not rate-limited like Trends)
+    # 3) Keyword Planner monthly volumes per city (Google Ads API; needs Basic access)
+    if not cfg.get("keyword_planner_enabled"):
+        con.close()
+        return
     try:
         api = _API.get("api") or AdsREST(cfg)
         _API["api"] = api
@@ -2093,7 +2097,7 @@ def build_overview(cfg, ads, trends, sh):
             A.append(("Low demand", "Low demand ahead: choose efficiency or share",
                       f"Demand next 4 weeks {pctf(n4)} vs normal. A) Efficiency: trim budget ~{int(min(30, round(-n4 / 5) * 5))}%, "
                       f"hold bids, protect CPA. B) Targets / share: keep budget, relax tCPA ~10–15% to keep spending "
-                      f"(CPA likely higher). The AM decides based on this month’s target."))
+                      f"(CPA likely higher). Choose based on this month’s target."))
         # rank / budget: flag a clear worsening vs this city's own normal, or extreme levels
         if r14 is not None and not any(x[0] == "Raise bids" for x in A):
             if r_base is not None and r14 - r_base >= 0.08:
