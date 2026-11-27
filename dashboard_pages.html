@@ -263,7 +263,7 @@ dl.gl dt{font-weight:600} dl.gl dd{margin:0;color:var(--muted)}
   <section data-tab="trust" class="hidden">
     <div class="panel">
       <div class="ph"><div><h2 style="font-size:15px;margin:0">Keyword ratio check</h2>
-        <p class="explain">Search ratio between “packers and movers” and other keywords in Google Trends, compared with Keyword Planner where available.</p></div>
+        <p class="explain">Search ratio between “packers and movers” and other keywords in Google Trends, for a random sample of weeks and cities.</p></div>
         <button class="btn sm" id="shuffle" type="button">New sample</button></div>
       <div class="datawrap" id="tEx" style="max-height:340px"></div>
     </div>
@@ -274,12 +274,6 @@ dl.gl dt{font-weight:600} dl.gl dd{margin:0;color:var(--muted)}
       <div class="datawrap" id="tValAds" style="max-height:300px"></div>
       <div class="bar" style="margin-top:12px"><span class="lbl">City</span><select id="citySel6" aria-label="City"></select></div>
       <div class="chart sm"><canvas id="cValAds"></canvas></div>
-    </div>
-    <div class="panel">
-      <div class="ph"><div><h2 style="font-size:15px;margin:0">Google Trends vs Keyword Planner</h2>
-        <p class="explain">Ratio of each keyword to “packers and movers” in both sources. Within ±25% = match.</p></div>
-        <button class="btn sm" data-csv="Validation_KP">CSV</button></div>
-      <div class="datawrap" id="tValKP" style="max-height:320px"></div>
     </div>
     <div class="panel">
       <div class="ph"><div><h2 style="font-size:15px;margin:0">Data coverage by state</h2>
@@ -629,7 +623,6 @@ function renderExternal(){
   const ks=kwList(), Lc=(D.Locations||[]).filter(r=>r.city!=="All India");
   table("tLoc",[{h:"City",k:"city",f:r=>`${esc(r.city)} ${r.running_campaigns?"":`<span class="tag t-down">not running</span>`}`},
     ...ks.map(k=>({h:esc(k),k:"interest: "+k,n:1,f:r=>fmt(r["interest: "+k])})),
-    {h:"Searches / month",k:"monthly_searches_generic_total",n:1,f:r=>fmt(r.monthly_searches_generic_total)},
     {h:"Cost (30d)",k:"cost_30d_incl_gst",n:1,f:r=>r.running_campaigns?inr(r.cost_30d_incl_gst):"–"}],Lc,{empty:"Not available yet."});
 }
 
@@ -680,14 +673,13 @@ function segDrawer(r){
 // ---------- trust ----------
 let EXSEED=1;
 function examples(){
-  const T=(D.Trends_Weekly_KW||[]), dk=(D.meta||{}).decision_keyword||"packers and movers", KP=D.Validation_KP||[];
+  const T=(D.Trends_Weekly_KW||[]), dk=(D.meta||{}).decision_keyword||"packers and movers";
   const by={}; T.forEach(r=>{const k=r.city+"|"+String(r.week_start).slice(0,10);(by[k]=by[k]||{})[r.kw]=r.idx;});
   const cand=[]; Object.entries(by).forEach(([k,v])=>{const [city,week]=k.split("|");Object.entries(v).forEach(([kw,x])=>{if(kw!==dk&&kwList().includes(kw)&&x>=1&&v[dk]>=5)cand.push({city,week,kw,pm:v[dk],x});});});
   let seed=EXSEED; const rnd=()=>{seed=(seed*16807)%2147483647;return seed/2147483647;};
   const pick=[]; const used=new Set();
   for(let i=0;i<60&&pick.length<6&&cand.length;i++){const c=cand[Math.floor(rnd()*cand.length)];const key=c.city+c.kw;if(used.has(key))continue;used.add(key);pick.push(c);}
-  return pick.map(c=>{const g=((D.meta||{}).city_geo||{})[c.city]||"IN";const kp=KP.find(x=>x.geo===g&&x.keyword===c.kw);const ratio=c.pm/c.x;
-    return {...c,ratio,kp:kp?kp.keyword_planner_ratio:null,kpv:kp?kp.verdict:null};});
+  return pick.map(c=>({...c,ratio:c.pm/c.x}));
 }
 function renderTrust(){
   $("shuffle").onclick=()=>{EXSEED=(EXSEED*48271)%2147483647||7;renderTrust();};
@@ -695,8 +687,7 @@ function renderTrust(){
   table("tEx",[{h:"City",k:"city"},{h:"Week",k:"week"},{h:"Keyword",k:"kw",f:r=>`<b>${esc(r.kw)}</b>`},
     {h:esc(dk),k:"pm",n:1,f:r=>fmt(r.pm,1)},{h:"Keyword score",k:"x",n:1,f:r=>fmt(r.x,1)},
     {h:"Trends ratio",k:"ratio",n:1,f:r=>`<b>${fmt(r.ratio,1)}×</b>`},
-    {h:"Equivalent",k:"ratio",w:1,f:r=>`${esc(r.kw)} 1,000 → ${esc(dk)} ≈ ${fmt(Math.round(r.ratio*1000/10)*10)}`},
-    {h:"Keyword Planner ratio",k:"kp",n:1,f:r=>r.kp==null?`<span class="tag t-flat">n/a</span>`:`${fmt(r.kp,1)}× <span class="tag ${/^Matches/.test(r.kpv)?"t-up":/Roughly/.test(r.kpv)?"t-info":"t-bad"}">${esc(r.kpv)}</span>`}],
+    {h:"Equivalent",k:"ratio",w:1,f:r=>`${esc(r.kw)} 1,000 → ${esc(dk)} ≈ ${fmt(Math.round(r.ratio*1000/10)*10)}`}],
     examples(),{empty:"Not available yet."});
   const vt=v=>`<span class="tag ${/Strong|^Matches|Good coverage/.test(v)?"t-up":/Moderate|Roughly/.test(v)?"t-info":/Weak|not match|Low coverage/.test(v)?"t-bad":"t-flat"}">${esc(v)}</span>`;
   table("tValAds",[{h:"City",k:"city",f:r=>`<b>${esc(r.city)}</b>`},{h:"Weeks compared",k:"weeks_compared",n:1},
@@ -709,11 +700,6 @@ function renderTrust(){
       {label:"Eligible searches (Google Ads)",data:W.map(r=>r.eligible_index),borderColor:css("--indigo"),backgroundColor:css("--indigo"),borderWidth:2,pointRadius:0,tension:.25},
       {label:"Google Trends",data:W.map(r=>r.trends_index),borderColor:css("--teal"),backgroundColor:css("--teal"),borderWidth:2,pointRadius:0,tension:.25}],
       {y:"Index (100 = average)"},true,{tooltip:{label:c=>`${c.dataset.label}: ${fmt(c.parsed.y)} (${pct(c.parsed.y-100)} vs average)`}}); }
-  table("tValKP",[{h:"Source",k:"source"},{h:"Where",k:"geo"},{h:"Keyword",k:"keyword",f:r=>`<b>${esc(r.keyword)}</b>`},{h:"Months",k:"months",n:1},
-    {h:"Keyword Planner ratio",k:"keyword_planner_ratio",n:1,f:r=>r.keyword_planner_ratio==null?"–":fmt(r.keyword_planner_ratio,1)+"×"},
-    {h:"Trends ratio",k:"trends_ratio",n:1,f:r=>r.trends_ratio==null?"–":fmt(r.trends_ratio,1)+"×"},
-    {h:"Gap",k:"difference_pct",n:1,f:r=>pct(r.difference_pct)},{h:"Monthly correlation",k:"monthly_shape_r",n:1,f:r=>r.monthly_shape_r==null?"–":fmt(r.monthly_shape_r,2)},
-    {h:"Verdict",k:"verdict",f:r=>vt(r.verdict)}],D.Validation_KP||[],{empty:"Keyword Planner data not available yet."});
   table("tDQ",[{h:"State",k:"state"},{h:"Cities",k:"cities",w:1},{h:"Keyword",k:"keyword"},{h:"Weeks",k:"weeks",n:1},
     {h:"Zero weeks",k:"zero_weeks_pct",n:1,f:r=>fmt(r.zero_weeks_pct)+"%"},{h:"Swing",k:"week_to_week_swing",n:1,f:r=>r.week_to_week_swing==null?"–":fmt(r.week_to_week_swing,2)},
     {h:"Verdict",k:"verdict",w:1,f:r=>vt(r.verdict)}],D.Data_Quality||[],{empty:"Not available yet."});
