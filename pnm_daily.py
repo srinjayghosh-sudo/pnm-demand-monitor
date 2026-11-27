@@ -114,6 +114,42 @@ CONFIG = {
         "Indore": "IN-MP", "Kochi": "IN-KL", "Ludhiana": "IN-PB",
     },
 
+    # ---------- Segments within a city (ad group + campaign name rules; first match wins) ----------
+    # Anything that matches no rule is "Generic / SKAG". Edit the words to match your naming.
+    "segment_rules": [
+        ("Brand", ["porter", "brand"]),
+        ("Competitor", ["comp", "competitor", "nobroker", "agarwal", "leo packers", "leo ", "gati", "om packers"]),
+        ("Intercity", ["intercity", "inter city", "interstate", "inter state", "outstation", "bike", "long distance"]),
+        ("Generic / SKAG", ["skag", "generic", "packers", "shifting", "movers"]),
+    ],
+    "segment_backfill_days": 120,
+    "segment_states_per_run": 3,
+    # Google Trends terms per segment, pulled together per state (max 5 = one shared scale)
+    "segment_trend_terms": [
+        ("Brand", "porter packers and movers"),
+        ("Generic / SKAG", "packers and movers"),
+        ("Generic / SKAG", "house shifting"),
+        ("Intercity", "bike shifting"),
+        ("Intercity", "interstate shifting"),
+    ],
+    # Top-5 competitors tracked in Google Trends (display name, search term). Who leads where is measured, not assumed.
+    "competitors": [
+        ("NoBroker", "nobroker packers and movers"),
+        ("Agarwal", "agarwal packers and movers"),
+        ("Leo", "leo packers and movers"),
+        ("Gati", "gati packers and movers"),
+        ("Om Packers", "om packers and movers"),
+    ],
+    "state_names": {"IN-MH": "Maharashtra", "IN-DL": "Delhi", "IN-KA": "Karnataka", "IN-TG": "Telangana",
+                    "IN-TN": "Tamil Nadu", "IN-WB": "West Bengal", "IN-GJ": "Gujarat", "IN-RJ": "Rajasthan",
+                    "IN-UP": "Uttar Pradesh", "IN-HR": "Haryana", "IN-CH": "Chandigarh", "IN-MP": "Madhya Pradesh",
+                    "IN-KL": "Kerala", "IN-PB": "Punjab"},
+    # Keyword Planner CSVs downloaded from the Google Ads UI, used to check Google Trends (kp_IN.csv, kp_IN-KA.csv ...)
+    "kp_manual_dir": "keyword_planner",
+    # Monthly targets per city (columns: month, city, target_conversions, target_spend_incl_gst). Optional.
+    "targets_csv": "targets.csv",
+    "tcpa_relax_pct": 12.5,          # option B assumes CPA rises by about this much when tCPA is loosened 10–15%
+
     # ---------- Analysis ----------
     "events_csv": "events.csv",
     "add_india_public_holidays": True,
@@ -1002,6 +1038,11 @@ def build_sheets(cfg):
         sheets.update(build_external(cfg, con, ads, trends, sheets))
     except Exception as e:
         print("external factors:", e)
+    try:
+        import pnm_segments
+        sheets.update(pnm_segments.build_segment_sheets(cfg, con, ads, trends, sheets))
+    except Exception as e:
+        print("segments analysis:", e)
     try:
         ov = build_overview(cfg, ads, trends, sheets)
         sheets = {"Budget_Board": ov["Budget_Board"], "Overview": ov["Overview"], "Actions": ov["Actions"],
@@ -1918,8 +1959,70 @@ def _chg(a, b):
     return None if (a is None or b is None or not b or pd.isna(a) or pd.isna(b)) else (a / b - 1) * 100
 
 
+def _read_targets(cfg):
+    path = cfg.get("targets_csv")
+    if not path or not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        t = pd.read_csv(path, dtype={"month": str})
+        t.columns = [c.strip().lower() for c in t.columns]
+        t["city"] = t["city"].astype(str).str.strip()
+        t["month"] = t["month"].astype(str).str.strip().str[:7]
+        for c in ("target_conversions", "target_spend_incl_gst"):
+            t[c] = pd.to_numeric(t.get(c), errors="coerce")
+        return t
+    except Exception as e:
+        print("targets.csv not read:", e)
+        return pd.DataFrame()
+
+
+def _pacing(tg, city, a, end, cpa30, a_daily, b_daily, a_bid, b_bid, cfg):
+    """Month-end projection under option A and B against this month's target (if one is set)."""
+    month = end.strftime("%Y-%m")
+    row = tg[(tg.month == month) & (tg.city == city)] if len(tg) else tg
+    if len(tg) and not len(row) and city == "All India":
+        row = tg[(tg.month == month) & (tg.city != "All India")]
+        t_conv = row.target_conversions.sum(min_count=1) if len(row) else None
+        t_spend = row.target_spend_incl_gst.sum(min_count=1) if len(row) else None
+    elif len(row):
+        t_conv, t_spend = row.target_conversions.iloc[0], row.target_spend_incl_gst.iloc[0]
+    else:
+        return {}
+    t_conv = None if t_conv is None or pd.isna(t_conv) else float(t_conv)
+    t_spend = None if t_spend is None or pd.isna(t_spend) else float(t_spend)
+    if t_conv is None and t_spend is None:
+        return {}
+    mtd = a[(a.index >= end.replace(day=1)) & (a.index <= end)]
+    dim = pd.Period(month).days_in_month
+    left = dim - end.day
+    relax = 1 + cfg["tcpa_relax_pct"] / 100
+    cpa_a = cpa30
+    cpa_b = cpa30 * (relax if ("Relax" in b_bid or ("Raise" in b_bid and "Raise" not in a_bid)) else 1) if cpa30 else None
+    mc, ms = float(mtd.conversions.sum()), float(mtd.cost.sum())
+    pa = mc + left * a_daily / cpa_a if cpa_a else None
+    pb = mc + left * b_daily / cpa_b if cpa_b else None
+    sa, sb = ms + left * a_daily, ms + left * b_daily
+    pc = lambda x, t: None if x is None or not t else round((x / t - 1) * 100, 1)
+    hint = None
+    if t_conv:
+        ga, gb = pc(pa, t_conv), pc(pb, t_conv)
+        if ga is not None and ga >= -5:
+            hint = "On track under A: efficiency is safe."
+        elif gb is not None and gb >= -5:
+            hint = "Behind target under A but on track under B: B suits this month."
+        elif ga is not None:
+            hint = "Behind target under both: discuss target or extra budget with the client."
+    return {"target_month": month, "target_conversions": t_conv, "target_spend": t_spend,
+            "mtd_conversions": round(mc, 1), "mtd_spend": round(ms), "days_left": left,
+            "proj_conv_a": round(pa) if pa is not None else None, "proj_conv_b": round(pb) if pb is not None else None,
+            "proj_spend_a": round(sa), "proj_spend_b": round(sb),
+            "pace_conv_a_pct": pc(pa, t_conv), "pace_conv_b_pct": pc(pb, t_conv),
+            "pace_spend_a_pct": pc(sa, t_spend), "pace_spend_b_pct": pc(sb, t_spend), "target_hint": hint}
+
+
 def build_overview(cfg, ads, trends, sh):
     today = pd.Timestamp(date.today())
+    _targets = _read_targets(cfg)
     mat = today - timedelta(days=cfg["maturity_days"] + 1)
     dk = cfg["decision_keyword"]
     fw = sh.get("Forecast_Weekly", pd.DataFrame())
@@ -1987,8 +2090,10 @@ def build_overview(cfg, ads, trends, sh):
             A.append(("Prepare", "Keep budget headroom",
                       f"Demand next 4 weeks {pctf(n4)} vs normal; make sure budgets aren’t capped."))
         if n4 is not None and n4 <= -10:
-            A.append(("Trim budget", f"Trim budget ~{int(min(30, round(-n4 / 5) * 5))}%, hold bids",
-                      f"Demand next 4 weeks {pctf(n4)} vs normal; fewer searches to buy."))
+            A.append(("Low demand", "Low demand ahead: choose efficiency or share",
+                      f"Demand next 4 weeks {pctf(n4)} vs normal. A) Efficiency: trim budget ~{int(min(30, round(-n4 / 5) * 5))}%, "
+                      f"hold bids, protect CPA. B) Targets / share: keep budget, relax tCPA ~10–15% to keep spending "
+                      f"(CPA likely higher). The AM decides based on this month’s target."))
         # rank / budget: flag a clear worsening vs this city's own normal, or extreme levels
         if r14 is not None and not any(x[0] == "Raise bids" for x in A):
             if r_base is not None and r14 - r_base >= 0.08:
@@ -2113,7 +2218,8 @@ def build_overview(cfg, ads, trends, sh):
             elif chg > 0:
                 nxt_steps.append(f"Raise the daily budget by about {chg:.0f}% to recover impressions lost to budget.")
             elif chg < 0:
-                nxt_steps.append(f"Lower the daily budget by about {-chg:.0f}% and keep bids unchanged.")
+                nxt_steps.append("Demand is lower: pick option A (trim budget, protect CPA) or option B "
+                                 "(keep budget, relax tCPA to hold share and targets) based on this month’s target.")
             else:
                 nxt_steps.append("Keep the daily budget as it is.")
         if r14 is not None and r_base is not None and r14 - r_base >= 0.08:
@@ -2130,6 +2236,23 @@ def build_overview(cfg, ads, trends, sh):
         else:
             bid = "Hold bids"
         nxt_steps.append("Check the result after 3–7 days: impression share up, CPA stable.")
+        # two options: A = protect efficiency, B = protect targets / market share
+        a_chg, a_bid = chg, bid
+        b_chg = max(chg, 0.0)
+        if chg < 0:
+            b_bid = "Relax tCPA / raise bids ~10–15%"
+            b_note = "Keep the budget and loosen tCPA so the budget still spends; holds share and monthly target, CPA likely rises."
+            a_note = "Spend less while searches are fewer; CPA stays protected, but monthly volume may fall short of target."
+        elif chg > 0:
+            b_bid = "Raise tCPA / bids ~10–15%" if (r14 is not None and r14 >= 0.30) else bid
+            if n4 is not None and n4 >= 10:
+                b_note = "Raise budget and push bids to take more share while demand is up."
+            else:
+                b_note = "Raise budget to stop losing impressions to budget, and push bids for extra share."
+            a_note = "Raise budget only as far as demand and budget-lost share justify; keep bids for efficiency."
+        else:
+            b_bid = bid
+            a_note = b_note = "Demand is normal; both approaches lead to the same action."
         conf = ("High" if (n4 is not None and err is not None and err <= 10 and b14 is not None) else
                 "Medium" if (n4 is not None or d7 is not None) else "Low")
         budget_rows.append({"city": city, "avg_daily_spend_7d": round(spend7), "budget_change_pct": chg,
@@ -2138,6 +2261,13 @@ def build_overview(cfg, ads, trends, sh):
                             "impr_share_14d": is14, "lost_to_budget_14d": b14, "lost_to_rank_14d": r14,
                             "cpa_30d_incl_gst": cpa30, "cpa_change_pct": cpa_chg, "conversions_30d": conv30,
                             "confidence": conf, "forecast_error_pct": err,
+                            "option_a_budget_pct": a_chg, "option_a_daily_budget": round(spend7 * (1 + a_chg / 100)),
+                            "option_a_bids": a_bid, "option_a_note": a_note,
+                            "option_b_budget_pct": b_chg, "option_b_daily_budget": round(spend7 * (1 + b_chg / 100)),
+                            "option_b_bids": b_bid, "option_b_note": b_note,
+                            "needs_am_decision": bool(a_chg != b_chg or a_bid != b_bid),
+                            **_pacing(_targets, city, a, end, cpa30, spend7 * (1 + a_chg / 100), spend7 * (1 + b_chg / 100),
+                                      a_bid, b_bid, cfg),
                             "why": " ".join(why) if why else "Demand and delivery are normal.",
                             "way_forward": " ".join(f"{i + 1}) {t}" for i, t in enumerate(nxt_steps))})
 
@@ -2158,7 +2288,11 @@ def build_overview(cfg, ads, trends, sh):
 def save_cache(cfg, sheets):
     payload = {"meta": {"keywords": cfg["trends_keywords"], "decision_keyword": cfg["decision_keyword"],
                         "account": cfg["customer_id"], "filter": cfg["campaign_name_regex"],
-                        "gst": cfg["gst_multiplier"], "refresh_time": "05:00 IST"}}
+                        "gst": cfg["gst_multiplier"], "refresh_time": "05:00 IST",
+                        "competitors": [n for n, _ in cfg["competitors"]],
+                        "city_geo": cfg["city_to_geo"], "state_names": cfg["state_names"],
+                        "tcpa_relax_pct": cfg["tcpa_relax_pct"],
+                        "segment_terms": [[sg, t] for sg, t in cfg["segment_trend_terms"]]}}
     if sheets is None:
         payload["empty"] = True
         xbytes = None
@@ -2166,7 +2300,9 @@ def save_cache(cfg, sheets):
         for k in ["Budget_Board", "Overview", "Actions", "Insights", "Summary", "Weekly", "Daily_Aligned", "DOW_Profile", "DayOfMonth_Profile", "Month_Profile",
                   "Spikes_Tagged", "Notes", "Forecast_Weekly", "Forecast_Daily", "Upcoming_Changes",
                   "Forecast_Accuracy", "Locations", "KP_Monthly", "KP_Keywords", "Trends_Weekly_KW",
-                  "Leading_Signal", "Leading_Weekly", "Event_Impact", "Weather_Impact", "Macro_Context"]:
+                  "Leading_Signal", "Leading_Weekly", "Event_Impact", "Weather_Impact", "Macro_Context",
+                  "Segments_City", "Segment_Demand_Weekly", "Competitor_State", "Competitor_Weekly",
+                  "Validation_Ads", "Validation_Ads_Weekly", "Validation_KP", "Data_Quality"]:
             payload[k] = _records(sheets.get(k))
         write_xlsx(cfg, sheets)
         xbytes = open(cfg["output_xlsx"], "rb").read()
@@ -2225,6 +2361,11 @@ def cloud_run(cfg, backfill=False):
         run_planning_jobs(cfg)             # 5-year Trends, rental signal, cities, weather, macro first
     except Exception as e:
         print("planning jobs:", e)
+    try:
+        import pnm_segments
+        pnm_segments.run_segment_jobs(cfg)  # ad group segments, segment demand, competitors
+    except Exception as e:
+        print("segments:", e)
     try:
         run_trends_daily(cfg)              # then the bulkier daily Trends history
     except Exception as e:
